@@ -8,10 +8,11 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
       <PackageReference Include="FFMpegCore" Version="5.4.0" />
       <PackageReference Include="OsuParsers" Version="1.7.2" />
       <PackageReference Include="Spectre.Console" Version="0.57.2" />
+      <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+      <PackageReference Include="SixLabors.ImageSharp" Version="2.1.13" />
     </ItemGroup>
 
 </Project>
