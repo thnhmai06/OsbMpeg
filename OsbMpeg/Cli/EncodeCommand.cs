@@ -62,7 +62,7 @@ public sealed class EncodeCommand : AsyncCommand<EncodeSettings>
         {
             var oszPath = Path.ChangeExtension(options.OutputPath, ".osz");
             var title = Path.GetFileNameWithoutExtension(settings.Input);
-            await OszPacker.PackAsync(options.OutputPath, options.AssetDir, stats.Duration, title, oszPath);
+            await OszPacker.PackAsync(options.OutputPath, options.AssetDir, options.AssetRelativeDir, stats.Duration, title, oszPath);
             AnsiConsole.MarkupLineInterpolated($"[green]packed[/] {oszPath}");
         }
 

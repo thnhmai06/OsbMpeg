@@ -33,8 +33,8 @@ public sealed class EncodePipeline(EncodeOptions options)
         var doc = new SbDocument { Assets = assetStore };
         var mapping = new CanvasMapping(width, height);
         var grid = new TileGrid(width, height, options.TileSize);
-        var tracker = new TileRunTracker(grid, options.HashQuantLevels);
-        var animationDetector = new AnimationDetector(fps, maxAccumulatedFrames: options.Gop);
+        var tracker = new TileRunTracker(grid, options.HashQuantLevels, canonicalSnapshot: !options.RawSnapshot, tolerance: options.TileTolerance);
+        var animationDetector = new AnimationDetector(fps, maxAccumulatedFrames: options.Gop, minUniqueness: options.MinAnimationUniqueness);
 
         var frameOpts = new FrameSourceOptions(width, height, fps, options.Start, options.Duration);
         var frameCount = 0;
@@ -47,7 +47,8 @@ public sealed class EncodePipeline(EncodeOptions options)
                 lastMs = frame.Pts * 1000.0;
                 frameCount++;
 
-                var merged = QuadtreeMerger.Merge(tracker.Advance(frame, lastMs), grid, options.MaxAssetPixels);
+                var batch = tracker.Advance(frame, lastMs);
+                var merged = options.NoQuadtree ? batch : QuadtreeMerger.Merge(batch, grid, options.MaxAssetPixels);
                 var (sprites, animations) = animationDetector.Process(merged, options.TileSize);
                 EmitRuns(sprites, doc, assetStore, mapping);
                 EmitAnimations(animations, doc, assetStore, mapping);
@@ -56,7 +57,8 @@ public sealed class EncodePipeline(EncodeOptions options)
             }
         }
 
-        var finalMerged = QuadtreeMerger.Merge(tracker.Flush(lastMs), grid, options.MaxAssetPixels);
+        var finalBatch = tracker.Flush(lastMs);
+        var finalMerged = options.NoQuadtree ? finalBatch : QuadtreeMerger.Merge(finalBatch, grid, options.MaxAssetPixels);
         var (finalSprites, finalAnimations) = animationDetector.Process(finalMerged, options.TileSize);
         EmitRuns(finalSprites, doc, assetStore, mapping);
         EmitAnimations(finalAnimations, doc, assetStore, mapping);
@@ -84,6 +86,7 @@ public sealed class EncodePipeline(EncodeOptions options)
             AnimationCount = doc.AnimationCount,
             CommandCount = doc.CommandCount,
             AssetCount = assetStore.FileCount,
+            AnimationFrameCount = assetStore.AnimationFrameCount,
             AssetBytes = assetStore.TotalBytes,
             RawFrameBytes = (long)width * height * 3 * frameCount,
             NaiveEstimatedBytes = naive.EstimatedStoryboardBytes,

@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using FFMpegCore;
+using OsbMpeg.Osb;
+using OsuParsers.Storyboards.Objects;
 
 namespace OsbMpeg.Encoder;
 
@@ -19,7 +21,7 @@ public static class OszPacker
     private const string Creator = "OsbMpeg";
     private const string Version = "Preview";
 
-    public static async Task<string> PackAsync(string osbPath, string assetAbsoluteDir, TimeSpan duration, string title, string oszOutputPath, CancellationToken ct = default)
+    public static async Task<string> PackAsync(string osbPath, string assetAbsoluteDir, string assetRelativeDir, TimeSpan duration, string title, string oszOutputPath, CancellationToken ct = default)
     {
         var staging = Path.Combine(Path.GetTempPath(), "osbmpeg_osz_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(staging);
@@ -35,13 +37,15 @@ public static class OszPacker
             await GenerateSilentAudioAsync(audioPath, duration, ct);
             await File.WriteAllTextAsync(osuPath, BuildOsuFile(title, duration), ct);
 
-            CopyAssets(assetAbsoluteDir, staging);
+            CopyAssets(assetAbsoluteDir, assetRelativeDir, staging);
 
             ValidateOsu(osuPath);
 
             if (File.Exists(oszOutputPath))
                 File.Delete(oszOutputPath);
             ZipFile.CreateFromDirectory(staging, oszOutputPath, CompressionLevel.Optimal, includeBaseDirectory: false);
+
+            ValidateAnimationFrames(oszOutputPath, osbDestPath);
 
             return oszOutputPath;
         }
@@ -51,16 +55,73 @@ public static class OszPacker
         }
     }
 
-    private static void CopyAssets(string assetAbsoluteDir, string staging)
+    /// <summary>Recursive: AssetStore now nests Animation frames under animations/a{id}/, so a
+    /// flat top-level-only copy would silently drop every frame file and leave the zip missing
+    /// exactly the assets a repeat of this bug already broke once.
+    ///
+    /// destDir is built from the caller-supplied assetRelativeDir, not from
+    /// assetAbsoluteDir's own folder name — those two only coincide when the encode used the
+    /// default asset directory. AssetId paths baked into the .osb always use
+    /// EncodeOptions.AssetRelativeDir (default "sb"); inferring the zip folder name from the
+    /// disk folder's basename instead breaks the moment someone passes a differently-named
+    /// --asset-dir, silently packing assets nobody can find by the declared path.</summary>
+    private static void CopyAssets(string assetAbsoluteDir, string assetRelativeDir, string staging)
     {
         if (!Directory.Exists(assetAbsoluteDir))
             return;
 
-        var assetDirName = Path.GetFileName(assetAbsoluteDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        var destDir = Path.Combine(staging, assetDirName);
-        Directory.CreateDirectory(destDir);
-        foreach (var file in Directory.EnumerateFiles(assetAbsoluteDir))
-            File.Copy(file, Path.Combine(destDir, Path.GetFileName(file)));
+        var destDir = Path.Combine(staging, assetRelativeDir.Replace('/', Path.DirectorySeparatorChar));
+        foreach (var file in Directory.EnumerateFiles(assetAbsoluteDir, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(assetAbsoluteDir, file);
+            var dest = Path.Combine(destDir, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(file, dest);
+        }
+    }
+
+    /// <summary>Decodes the packed .osb and, for every Animation object, derives every frame's
+    /// expected path the same way osu! itself does (Path.Replace(".", $"{i}.") on the declared
+    /// base path) and checks it's actually present as a zip entry. This is the check that would
+    /// have caught the original silent-overwrite naming collision and the flat-copy bug above —
+    /// both left the .osb referencing frames that either never existed or got clobbered, with
+    /// no error anywhere in the encode/pack pipeline.</summary>
+    private static void ValidateAnimationFrames(string oszPath, string osbStagingPath)
+    {
+        var storyboard = StoryboardDecoderGate.Decode(osbStagingPath);
+
+        using var archive = ZipFile.OpenRead(oszPath);
+        var entries = new HashSet<string>(
+            archive.Entries.Select(e => e.FullName.Replace('\\', '/')),
+            StringComparer.Ordinal); // zip entries are case-sensitive regardless of host filesystem
+
+        var missing = new List<string>();
+        var animationCount = 0;
+
+        foreach (var layer in new[] { storyboard.BackgroundLayer, storyboard.FailLayer, storyboard.PassLayer, storyboard.ForegroundLayer, storyboard.OverlayLayer })
+        {
+            foreach (var obj in layer)
+            {
+                if (obj is not StoryboardAnimation animation)
+                    continue;
+                animationCount++;
+
+                if (animation.FrameCount <= 0)
+                    missing.Add($"{animation.FilePath} (FrameCount={animation.FrameCount})");
+
+                for (var i = 0; i < animation.FrameCount; i++)
+                {
+                    var framePath = animation.FilePath.Replace(".", $"{i}.").Replace('\\', '/');
+                    if (!entries.Contains(framePath))
+                        missing.Add(framePath);
+                }
+            }
+        }
+
+        if (missing.Count > 0)
+            throw new InvalidOperationException(
+                $"Packed .osz is missing {missing.Count} animation frame file(s) out of {animationCount} Animation object(s) — " +
+                $"e.g.: {string.Join(", ", missing.Take(10))}" + (missing.Count > 10 ? ", ..." : ""));
     }
 
     private static async Task GenerateSilentAudioAsync(string outputPath, TimeSpan duration, CancellationToken ct)

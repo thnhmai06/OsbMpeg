@@ -18,10 +18,18 @@ public enum AssetConsumer
     AnimationFrame,
 }
 
-/// <summary>Content-hash addressed PNG asset store. File names are generated
-/// (&lt;prefix&gt;&lt;n&gt;.png) so they always contain exactly one dot and no dot in the
-/// directory component — required because osu!'s Animation frame path derivation
-/// (Path.Replace(".", $"{i}.")) mangles any other dot in the path.</summary>
+/// <summary>Content-hash addressed PNG asset store, laid out as:
+///   sprites/{prefix}{n}.png
+///   animations/a{id}/a{id}.png (+ per-frame a{id}{i}.png written by WriteAnimation)
+/// Every Animation gets its own numbered subfolder so two different animations can never
+/// collide on-disk: osu!'s frame path derivation (Path.Replace(".", $"{i}.")) operates on the
+/// *whole* declared path, so "animations/a7/a7.png" and "animations/a71/a71.png" stay distinct
+/// after substitution even though the bare filenames "a7"+"10" and "a71"+"0" would otherwise
+/// both stringify to "a710" — a real collision that silently overwrote whichever animation's
+/// frame lost the race (fixed here, previously fixed with zero-padding instead — folder
+/// namespacing is strictly better since it doesn't depend on an assumed max counter width).
+/// Each animation's own base filename still has exactly one dot and its own folder has none,
+/// matching osu!'s substitution rule.</summary>
 public sealed class AssetStore
 {
     private readonly string _absoluteDir;
@@ -31,8 +39,10 @@ public sealed class AssetStore
     private readonly PngCompressionLevel _compressionLevel;
     private readonly Dictionary<(AssetConsumer Consumer, string Hash), AssetId> _dedupe = new();
     private int _counter;
+    private int _animationCounter;
 
     public int FileCount { get; private set; }
+    public int AnimationFrameCount { get; private set; }
     public long TotalBytes { get; private set; }
 
     public AssetStore(string absoluteAssetDir, string relativeDirInOsb, string namePrefix, int colors = 0, int pngCompressionLevel = 6)
@@ -57,31 +67,39 @@ public sealed class AssetStore
         if (_dedupe.TryGetValue(key, out var existing))
             return existing;
 
-        var fileName = $"{_namePrefix}{_counter++}.png";
-        var id = SavePng(fileName, rgb, width, height);
+        var relativePath = $"sprites/{_namePrefix}{_counter++}.png";
+        var id = SavePng(relativePath, rgb, width, height);
         _dedupe[key] = id;
         return id;
     }
 
-    /// <summary>Writes an Animation's frame sequence. Frame files are named per osu!'s own
-    /// derivation rule — the returned AssetId is a template path with exactly one dot; frame i
-    /// lives at template.Replace(".", "{i}."), matching SbAnimation.FramePath. Not
-    /// content-hash deduped: Animation frames forfeit cross-tile dedupe by construction (a
-    /// frame's filename is positionally fixed by its index, it can't alias another file), so
-    /// there's nothing to look up.</summary>
+    /// <summary>Writes an Animation's frame sequence into its own numbered subfolder. The
+    /// returned AssetId is the base template path (one dot); frame i lives at
+    /// template.Replace(".", "{i}."), matching SbAnimation.FramePath. Not content-hash
+    /// deduped: Animation frames forfeit cross-tile dedupe by construction (a frame's filename
+    /// is positionally fixed by its index, it can't alias another file), so there's nothing to
+    /// look up.</summary>
     public AssetId WriteAnimation(IReadOnlyList<byte[]> frames, int width, int height)
     {
-        var baseFileName = $"{_namePrefix}a{_counter++}.png";
+        var id = ++_animationCounter;
+        var relDir = $"animations/a{id}";
+        var baseFileName = $"a{id}.png";
 
         for (var i = 0; i < frames.Count; i++)
-            SavePng(baseFileName.Replace(".", $"{i}."), frames[i], width, height);
+            SavePng($"{relDir}/{baseFileName.Replace(".", $"{i}.")}", frames[i], width, height);
+        AnimationFrameCount += frames.Count;
 
-        return new AssetId($"{_relativeDir}/{baseFileName}");
+        return new AssetId($"{_relativeDir}/{relDir}/{baseFileName}");
     }
 
-    private AssetId SavePng(string fileName, ReadOnlySpan<byte> rgb, int width, int height)
+    /// <param name="relativePath">Forward-slash path relative to the asset dir; may include
+    /// subdirectories, which are created as needed.</param>
+    private AssetId SavePng(string relativePath, ReadOnlySpan<byte> rgb, int width, int height)
     {
-        var absolute = Path.Combine(_absoluteDir, fileName);
+        var absolute = Path.Combine(_absoluteDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var dir = Path.GetDirectoryName(absolute);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
 
         using (var image = Image.LoadPixelData<Rgb24>(rgb, width, height))
         {
@@ -95,6 +113,6 @@ public sealed class AssetStore
 
         FileCount++;
         TotalBytes += new FileInfo(absolute).Length;
-        return new AssetId($"{_relativeDir}/{fileName}");
+        return new AssetId($"{_relativeDir}/{relativePath}");
     }
 }

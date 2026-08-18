@@ -15,6 +15,7 @@ public sealed class EncodeStatistics
     public required int AnimationCount { get; init; }
     public required int CommandCount { get; init; }
     public required int AssetCount { get; init; }
+    public required int AnimationFrameCount { get; init; }
     public required long AssetBytes { get; init; }
 
     public required long RawFrameBytes { get; init; }

@@ -16,6 +16,10 @@ public sealed record EncodeOptions(
     int PngCompressionLevel,
     string? FFmpegPath,
     int Gop = 300,
+    bool RawSnapshot = false,
+    double MinAnimationUniqueness = 0.8,
+    int TileTolerance = 0,
+    bool NoQuadtree = false,
     TimeSpan? Start = null,
     TimeSpan? Duration = null,
     long MaxAssetPixels = 17_000_000)

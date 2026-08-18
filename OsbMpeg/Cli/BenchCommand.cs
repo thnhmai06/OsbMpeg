@@ -48,6 +48,10 @@ public sealed class BenchCommand : AsyncCommand<BenchSettings>
             Colors: settings.Colors,
             PngCompressionLevel: 6,
             FFmpegPath: settings.FFmpegPath,
+            RawSnapshot: settings.RawSnapshot,
+            MinAnimationUniqueness: settings.MinAnimationUniqueness,
+            TileTolerance: settings.TileTolerance,
+            NoQuadtree: settings.NoQuadtree,
             Start: EncodeOptions.ParseFFmpegTime(settings.Start),
             Duration: EncodeOptions.ParseFFmpegTime(settings.Duration));
 
@@ -80,6 +84,9 @@ public sealed class BenchCommand : AsyncCommand<BenchSettings>
         var (psnr, ssim, compared) = await ComparePsnrSsimAsync(options.InputPath, reconPath, encodeStats.Width, encodeStats.Height, encodeStats.Fps, options.Start, options.Duration);
         ReportTables.PrintQualityTable(psnr, ssim, decodeSw.Elapsed);
 
+        var peakWorkingSetBytes = Process.GetCurrentProcess().PeakWorkingSet64;
+        AnsiConsole.MarkupLineInterpolated($"Peak working set: [bold]{EncodeLiveView.FormatBytes(peakWorkingSetBytes)}[/]");
+
         if (settings.StatsJson is not null)
         {
             var combined = new
@@ -87,6 +94,7 @@ public sealed class BenchCommand : AsyncCommand<BenchSettings>
                 Encode = encodeStats,
                 Quality = new { Psnr = psnr, Ssim = ssim, FramesCompared = compared },
                 DecodeTime = decodeSw.Elapsed,
+                PeakWorkingSetBytes = peakWorkingSetBytes,
             };
             await File.WriteAllTextAsync(settings.StatsJson, System.Text.Json.JsonSerializer.Serialize(combined, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }

@@ -26,6 +26,7 @@ public static class ReportTables
         storyboard.AddRow("Animations", s.AnimationCount.ToString("N0"));
         storyboard.AddRow("Commands", s.CommandCount.ToString("N0"));
         storyboard.AddRow("Assets", s.AssetCount.ToString("N0"));
+        storyboard.AddRow("  of which animation frames", s.AnimationFrameCount.ToString("N0"));
         AnsiConsole.Write(storyboard);
 
         var compression = new Table().Border(TableBorder.Rounded).Title("Compression");

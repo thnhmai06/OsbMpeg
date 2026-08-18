@@ -22,6 +22,19 @@ public static class ContentHasher
         return BitConverter.ToUInt64(digest);
     }
 
+    /// <summary>Same as <see cref="Hash(ReadOnlySpan{byte},int)"/>, but also writes the
+    /// quantized bytes to <paramref name="canonical"/> so the caller can use them as the run's
+    /// stored snapshot — two tiles that hash equal at this quantization level then also produce
+    /// byte-identical snapshots, which is what lets AssetStore's content-hash dedupe actually
+    /// fire across positions instead of only ever seeing raw, always-distinct pixels.</summary>
+    public static ulong Hash(ReadOnlySpan<byte> rgb, int quantLevels, Span<byte> canonical)
+    {
+        Quantize(rgb, canonical, quantLevels);
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(canonical, digest);
+        return BitConverter.ToUInt64(digest);
+    }
+
     private static void Quantize(ReadOnlySpan<byte> src, Span<byte> dst, int levels)
     {
         if (levels <= 0 || levels >= 256)
@@ -30,8 +43,13 @@ public static class ContentHasher
             return;
         }
 
+        // bucket-center, not floor: floor drags every channel down by up to `step-1`
+        // (mean step/2) — invisible while quantized bytes were hash-only scratch, but a
+        // systematic darkening bias once they become the rendered snapshot (see canonical
+        // snapshot mode in TileRunTracker).
         var step = 256 / levels;
+        var half = step / 2;
         for (var i = 0; i < src.Length; i++)
-            dst[i] = (byte)(src[i] / step * step);
+            dst[i] = (byte)Math.Min(255, src[i] / step * step + half);
     }
 }

@@ -33,6 +33,22 @@ public sealed class BenchSettings : CommandSettings
     [Description("Palette size for asset PNG quantization. 0 disables quantization. Default: 0.")]
     public int Colors { get; set; }
 
+    [CommandOption("--raw-snapshot")]
+    [Description("A/B flag: store raw pixel snapshots instead of the canonical (hash-quantized) bytes, disabling cross-position dedupe on quantization equality. Default off.")]
+    public bool RawSnapshot { get; set; }
+
+    [CommandOption("--min-animation-uniqueness <FRACTION>")]
+    [Description("Fraction of distinct content required in a thrashing run before it's promoted to Animation instead of falling back to deduped sprites. 0-1. Default: 0.8.")]
+    public double MinAnimationUniqueness { get; set; } = 0.8;
+
+    [CommandOption("--tile-tolerance <N>")]
+    [Description("Mean-absolute-error budget (0-255/channel) confirming a hash-proposed run cut against the raw tile before actually cutting. 0 disables (default).")]
+    public int TileTolerance { get; set; }
+
+    [CommandOption("--no-quadtree")]
+    [Description("Diagnostic: bypass QuadtreeMerger entirely, emitting only base-tile runs. For auditing whether merge helps or hurts asset count.")]
+    public bool NoQuadtree { get; set; }
+
     [CommandOption("--quality <SPEC>")]
     public string Quality { get; set; } = "psnr=35";
 

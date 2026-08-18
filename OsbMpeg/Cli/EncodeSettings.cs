@@ -72,7 +72,7 @@ public sealed class EncodeSettings : CommandSettings
     public int TileSize { get; set; } = 64;
 
     [CommandOption("--hash-quant <LEVELS>")]
-    [Description("Color quantization levels used only for the hash proposal, not the asset. Default: 32.")]
+    [Description("Color quantization levels for run grouping. Also the stored asset's pixel precision (canonical snapshot dedupe) — lowering this trades visual quality for more cross-tile dedupe, it's no longer grouping-only. Default: 32.")]
     public int HashQuantLevels { get; set; } = 32;
 
     [CommandOption("--gop <FRAMES>")]
