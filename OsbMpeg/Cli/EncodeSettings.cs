@@ -75,6 +75,10 @@ public sealed class EncodeSettings : CommandSettings
     [Description("Color quantization levels for run grouping. Also the stored asset's pixel precision (canonical snapshot dedupe) — lowering this trades visual quality for more cross-tile dedupe, it's no longer grouping-only. Default: 32.")]
     public int HashQuantLevels { get; set; } = 32;
 
+    [CommandOption("--tile-tolerance <N>")]
+    [Description("Mean-absolute-error budget (0-255/channel) confirming a hash-proposed run cut against the raw tile before actually cutting — false cuts from hash quantization noise don't fragment the run. 0 disables (default). Measured win on every fixture tested: assets down and quality up simultaneously up to about 8, e.g. --tile-size 128 --tile-tolerance 8 cut bad_apple's asset count ~52% while raising SSIM 0.859->0.948.")]
+    public int TileTolerance { get; set; }
+
     [CommandOption("--gop <FRAMES>")]
     [Description("Bounded segment size for streaming analysis. Default: 300.")]
     public int Gop { get; set; } = 300;
