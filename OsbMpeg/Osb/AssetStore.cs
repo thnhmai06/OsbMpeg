@@ -29,7 +29,14 @@ public enum AssetConsumer
 /// frame lost the race (fixed here, previously fixed with zero-padding instead — folder
 /// namespacing is strictly better since it doesn't depend on an assumed max counter width).
 /// Each animation's own base filename still has exactly one dot and its own folder has none,
-/// matching osu!'s substitution rule.</summary>
+/// matching osu!'s substitution rule.
+///
+/// ponytail: tried JPEG-for-opaque-tiles (osu-wiki's own advice: PNG for transparency, JPEG
+/// otherwise) to cut asset bytes. Measured worse on both fixtures tested — +6.5% on
+/// line-art anime, +62.6% on bad_apple's flat 2-color content — because JPEG's fixed
+/// per-8x8-block cost and edge ringing lose to PNG's lossless deflate on exactly the kind of
+/// content this codec's tiles tend to be (small, flat-color or line-art, heavily repeated).
+/// Reverted; stick to PNG unless a fixture with real photographic gradients shows otherwise.</summary>
 public sealed class AssetStore
 {
     private readonly string _absoluteDir;
@@ -104,10 +111,7 @@ public sealed class AssetStore
         using (var image = Image.LoadPixelData<Rgb24>(rgb, width, height))
         {
             if (_colors > 0)
-            {
                 image.Mutate(ctx => ctx.Quantize(new OctreeQuantizer(new QuantizerOptions { MaxColors = _colors })));
-            }
-
             image.SaveAsPng(absolute, new PngEncoder { CompressionLevel = _compressionLevel });
         }
 

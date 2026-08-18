@@ -108,7 +108,7 @@ public sealed class EncodeSettings : CommandSettings
     public long MaxAssetPixels { get; set; } = 17_000_000;
 
     [CommandOption("--asset-format <FMT>")]
-    [Description("Reserved: png|jpg. Not yet wired — AssetStore always writes PNG.")]
+    [Description("Reserved: png|jpg. Not yet wired — AssetStore always writes PNG. JPEG was tried (osu-wiki's own advice: PNG for transparency, JPEG for opaque) and measured worse on every fixture tested (+6.5% to +62.6%) — this codec's tiles are small and flat-color/line-art, exactly where JPEG's per-block overhead loses to PNG's lossless deflate.")]
     public string AssetFormat { get; set; } = "png";
 
     [CommandOption("--colors <N>")]
