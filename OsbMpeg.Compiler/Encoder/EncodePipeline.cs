@@ -30,7 +30,7 @@ public sealed class EncodePipeline(EncodeOptions options)
         Directory.CreateDirectory(options.AssetDir);
 
         var assetStore = new AssetStore(options.AssetDir, options.AssetRelativeDir, options.AssetNamePrefix, options.Colors, options.PngCompressionLevel);
-        var doc = new SbDocument { Assets = assetStore };
+        var doc = new SbDocument();
         var mapping = new CanvasMapping(width, height);
         var grid = new TileGrid(width, height, options.TileSize);
         var tracker = new TileRunTracker(grid, options.HashQuantLevels, canonicalSnapshot: !options.RawSnapshot, tolerance: options.TileTolerance);

@@ -1,7 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <OutputType>Exe</OutputType>
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
@@ -9,10 +8,11 @@
 
     <ItemGroup>
       <PackageReference Include="FFMpegCore" Version="5.4.0" />
-      <PackageReference Include="OsuParsers" Version="1.7.2" />
-      <PackageReference Include="Spectre.Console" Version="0.57.2" />
-      <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
       <PackageReference Include="SixLabors.ImageSharp" Version="2.1.13" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\OsbMpeg.Parsers\OsbMpeg.Parsers.csproj" />
     </ItemGroup>
 
 </Project>

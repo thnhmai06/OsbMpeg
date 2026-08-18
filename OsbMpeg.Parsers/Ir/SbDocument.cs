@@ -1,10 +1,7 @@
-using OsbMpeg.Osb;
-
 namespace OsbMpeg.Ir;
 
 public sealed class SbDocument
 {
-    public required AssetStore Assets { get; init; }
     public Dictionary<SbLayer, List<SbObject>> Layers { get; } = new();
     public Dictionary<string, string> Variables { get; } = new();
 

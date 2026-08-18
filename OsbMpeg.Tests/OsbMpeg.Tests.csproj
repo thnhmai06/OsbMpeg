@@ -17,7 +17,8 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\OsbMpeg\OsbMpeg.csproj" />
+        <ProjectReference Include="..\OsbMpeg.Compiler\OsbMpeg.Compiler.csproj" />
+        <ProjectReference Include="..\OsbMpeg.Parsers\OsbMpeg.Parsers.csproj" />
     </ItemGroup>
 
 </Project>

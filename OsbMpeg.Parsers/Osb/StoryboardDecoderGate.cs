@@ -6,7 +6,7 @@ namespace OsbMpeg.Osb;
 /// <summary>StoryboardDecoder is a static class with private static state (not reentrant —
 /// see OsuParsers issue #43). Every call in this codebase goes through here so it's
 /// serialized behind one lock instead of each caller inventing its own.</summary>
-internal static class StoryboardDecoderGate
+public static class StoryboardDecoderGate
 {
     private static readonly Lock Gate = new();
 

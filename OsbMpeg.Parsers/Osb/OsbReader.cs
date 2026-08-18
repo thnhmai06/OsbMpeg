@@ -16,10 +16,7 @@ public static class OsbReader
     {
         var sb = StoryboardDecoderGate.Decode(osbPath);
 
-        var assetRootDir = Path.GetDirectoryName(Path.GetFullPath(osbPath)) ?? ".";
-        var placeholderAssets = new AssetStore(assetRootDir, "", "unused"); // decode never writes new assets
-
-        var doc = new SbDocument { Assets = placeholderAssets };
+        var doc = new SbDocument();
 
         AddLayer(doc, SbLayer.Background, sb.BackgroundLayer);
         AddLayer(doc, SbLayer.Fail, sb.FailLayer);

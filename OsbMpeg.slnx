@@ -1,4 +1,6 @@
 <Solution>
-  <Project Path="OsbMpeg/OsbMpeg.csproj" />
+  <Project Path="OsbMpeg.Cli/OsbMpeg.Cli.csproj" />
+  <Project Path="OsbMpeg.Compiler/OsbMpeg.Compiler.csproj" />
+  <Project Path="OsbMpeg.Parsers/OsbMpeg.Parsers.csproj" />
   <Project Path="OsbMpeg.Tests/OsbMpeg.Tests.csproj" />
 </Solution>
