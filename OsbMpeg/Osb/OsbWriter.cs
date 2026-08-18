@@ -46,7 +46,7 @@ public static class OsbWriter
                 w.WriteLine($"Sprite,{obj.Layer},{obj.Origin},\"{s.Asset}\",{FormatFloat(obj.X)},{FormatFloat(obj.Y)}");
                 break;
             case SbAnimation a:
-                w.WriteLine($"Animation,{obj.Layer},{obj.Origin},\"{a.Frames[0]}\",{FormatFloat(obj.X)},{FormatFloat(obj.Y)},{a.Frames.Length},{FormatFloat((float)a.FrameDelayMs)},{a.LoopType}");
+                w.WriteLine($"Animation,{obj.Layer},{obj.Origin},\"{a.BasePath}\",{FormatFloat(obj.X)},{FormatFloat(obj.Y)},{a.FrameCount},{FormatFloat((float)a.FrameDelayMs)},{a.LoopType}");
                 break;
             default:
                 throw new NotSupportedException($"Unknown storyboard object type: {obj.GetType()}");

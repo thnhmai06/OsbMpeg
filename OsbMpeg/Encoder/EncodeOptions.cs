@@ -15,8 +15,10 @@ public sealed record EncodeOptions(
     int Colors,
     int PngCompressionLevel,
     string? FFmpegPath,
+    int Gop = 300,
     TimeSpan? Start = null,
-    TimeSpan? Duration = null)
+    TimeSpan? Duration = null,
+    long MaxAssetPixels = 17_000_000)
 {
     public static (int Width, int Height) ParseSize(string spec)
     {

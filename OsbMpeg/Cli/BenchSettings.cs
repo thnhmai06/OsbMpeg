@@ -26,6 +26,13 @@ public sealed class BenchSettings : CommandSettings
     [CommandOption("--tile-size <PX>")]
     public int TileSize { get; set; } = 64;
 
+    [CommandOption("--hash-quant <LEVELS>")]
+    public int HashQuantLevels { get; set; } = 32;
+
+    [CommandOption("--colors <N>")]
+    [Description("Palette size for asset PNG quantization. 0 disables quantization. Default: 0.")]
+    public int Colors { get; set; }
+
     [CommandOption("--quality <SPEC>")]
     public string Quality { get; set; } = "psnr=35";
 

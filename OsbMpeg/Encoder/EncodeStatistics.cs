@@ -21,6 +21,10 @@ public sealed class EncodeStatistics
     public required long OsbFileBytes { get; init; }
     public required long SourceFileBytes { get; init; }
 
+    /// <summary>Estimated size of the "dump every frame as its own sprite" strawman — see
+    /// NaiveBaseline. The denominator that actually proves the tile codec does something.</summary>
+    public required long NaiveEstimatedBytes { get; init; }
+
     public required TimeSpan EncodeTime { get; init; }
 
     private long StoryboardBytes => OsbFileBytes + AssetBytes;
@@ -32,6 +36,8 @@ public sealed class EncodeStatistics
     public double ReductionVsRawFrames => RawFrameBytes == 0 ? 0 : 1.0 - (double)StoryboardBytes / RawFrameBytes;
 
     public double ReductionVsSourceFile => SourceFileBytes == 0 ? 0 : 1.0 - (double)StoryboardBytes / SourceFileBytes;
+
+    public double ReductionVsNaive => NaiveEstimatedBytes == 0 ? 0 : 1.0 - (double)StoryboardBytes / NaiveEstimatedBytes;
 
     public string ToJson() => JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
 }

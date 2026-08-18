@@ -44,15 +44,15 @@ public sealed class EncodeSettings : CommandSettings
     public string? Duration { get; set; }
 
     [CommandOption("--vf|--video-filter <FILTERGRAPH>")]
-    [Description("Extra ffmpeg -vf filtergraph applied before analysis.")]
+    [Description("Reserved: extra ffmpeg -vf filtergraph applied before analysis. Not yet wired.")]
     public string? VideoFilter { get; set; }
 
     [CommandOption("--ff:i <ARGS>")]
-    [Description("Raw ffmpeg arguments inserted before -i (input side).")]
+    [Description("Reserved: raw ffmpeg arguments inserted before -i (input side). Not yet wired.")]
     public string? FFmpegInputArgs { get; set; }
 
     [CommandOption("--ff:o <ARGS>")]
-    [Description("Raw ffmpeg arguments inserted on the output side.")]
+    [Description("Reserved: raw ffmpeg arguments inserted on the output side. Not yet wired.")]
     public string? FFmpegOutputArgs { get; set; }
 
     [CommandOption("--ffmpeg-path <DIR>")]
@@ -60,11 +60,11 @@ public sealed class EncodeSettings : CommandSettings
     public string? FFmpegPath { get; set; }
 
     [CommandOption("--quality <SPEC>")]
-    [Description("Quality target as metric=value, e.g. psnr=40 or ssim=0.98. Default: psnr=35.")]
+    [Description("Reserved for the RDO selector (optimizer phase): metric=value, e.g. psnr=40. Not yet wired.")]
     public string Quality { get; set; } = "psnr=35";
 
     [CommandOption("--preset <PRESET>")]
-    [Description("Speed/quality tradeoff preset (ultrafast..veryslow). Default: medium.")]
+    [Description("Reserved for the RDO selector (optimizer phase). Not yet wired.")]
     public string Preset { get; set; } = "medium";
 
     [CommandOption("--tile-size <PX>")]
@@ -92,15 +92,15 @@ public sealed class EncodeSettings : CommandSettings
     public bool Occlusion { get; set; }
 
     [CommandOption("--max-sprites <N>")]
-    [Description("Hard cap on sprite count. Default: unlimited.")]
+    [Description("Reserved for the RDO selector (optimizer phase): hard cap on sprite count. Not yet wired.")]
     public int? MaxSprites { get; set; }
 
     [CommandOption("--max-commands <N>")]
-    [Description("Hard cap on total command count. Default: unlimited.")]
+    [Description("Reserved for the RDO selector (optimizer phase): hard cap on command count. Not yet wired.")]
     public int? MaxCommands { get; set; }
 
     [CommandOption("--max-assets <N>")]
-    [Description("Hard cap on distinct asset count. Default: unlimited.")]
+    [Description("Reserved for the RDO selector (optimizer phase): hard cap on distinct asset count. Not yet wired — use --tile-size/--colors/--hash-quant to control asset count today.")]
     public int? MaxAssets { get; set; }
 
     [CommandOption("--max-asset-pixels <N>")]
@@ -108,7 +108,7 @@ public sealed class EncodeSettings : CommandSettings
     public long MaxAssetPixels { get; set; } = 17_000_000;
 
     [CommandOption("--asset-format <FMT>")]
-    [Description("Asset image format: png|jpg. Default: png.")]
+    [Description("Reserved: png|jpg. Not yet wired — AssetStore always writes PNG.")]
     public string AssetFormat { get; set; } = "png";
 
     [CommandOption("--colors <N>")]
@@ -120,22 +120,26 @@ public sealed class EncodeSettings : CommandSettings
     public int PngCompression { get; set; } = 6;
 
     [CommandOption("--loglevel <LEVEL>")]
-    [Description("quiet|error|warning|info|debug. Default: info.")]
+    [Description("Reserved: quiet|error|warning|info|debug. Not yet wired.")]
     public string LogLevel { get; set; } = "info";
 
     [CommandOption("--stats-json <FILE>")]
     [Description("Write final EncodeStatistics as JSON to this path.")]
     public string? StatsJson { get; set; }
 
+    [CommandOption("--pack-osz")]
+    [Description("Also bundle a minimal .osu + audio + the .osb/assets into a .osz next to the output, ready to drop into osu!.")]
+    public bool PackOsz { get; set; }
+
     [CommandOption("--no-progress")]
     [Description("Disable the live Spectre progress view (for CI/scripts).")]
     public bool NoProgress { get; set; }
 
     [CommandOption("--benchmark")]
-    [Description("Also decode the result and print quality/performance metrics.")]
+    [Description("Reserved: also decode the result and print quality/performance metrics. Not yet wired — use the `bench` command instead.")]
     public bool Benchmark { get; set; }
 
     [CommandOption("--integer-frame-delay")]
-    [Description("Snap sample fps so Animation frameDelay is integer ms (stable-safe). Not needed for lazer.")]
+    [Description("Reserved: snap sample fps so Animation frameDelay is integer ms (stable-safe). Not yet wired — not needed for lazer anyway.")]
     public bool IntegerFrameDelay { get; set; }
 }

@@ -55,7 +55,8 @@ public static class OsbReader
                         Origin = (SbOrigin)(int)animation.Origin,
                         X = animation.X,
                         Y = animation.Y,
-                        Frames = BuildFramePaths(animation.FilePath, animation.FrameCount),
+                        BasePath = new AssetId(animation.FilePath),
+                        FrameCount = animation.FrameCount,
                         FrameDelayMs = animation.FrameDelay,
                         LoopType = (SbLoopType)(int)animation.LoopType,
                         Commands = ConvertCommands(animation.Commands),
@@ -65,16 +66,6 @@ public static class OsbReader
         }
     }
 
-    /// <summary>Mirrors lazer's frame path derivation exactly (Path.Replace(".", "{i}.") —
-    /// replaces every dot, not just the extension separator) so we resolve frames the same
-    /// way the real renderer would, bugs included.</summary>
-    private static AssetId[] BuildFramePaths(string basePath, int frameCount)
-    {
-        var frames = new AssetId[frameCount];
-        for (var i = 0; i < frameCount; i++)
-            frames[i] = new AssetId(basePath.Replace(".", $"{i}."));
-        return frames;
-    }
 
     private static List<SbCommand> ConvertCommands(CommandGroup group)
     {

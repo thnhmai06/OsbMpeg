@@ -27,9 +27,19 @@ public enum SbLoopType
     LoopOnce = 1,
 }
 
+/// <summary>osu! derives EVERY frame's file — including frame 0 — from BasePath via
+/// `BasePath.Replace(".", "{i}.")` (verified against LegacyStoryboardDecoder /
+/// DrawableStoryboardAnimation; it replaces every dot in the path, not just the extension
+/// separator). BasePath itself is never read as an image. Storing a resolved per-frame array
+/// instead of BasePath+FrameCount would be a trap: writing an already-substituted "frame 0"
+/// path as the .osb's literal path field would get substituted a second time by the real
+/// client, producing the wrong file.</summary>
 public sealed class SbAnimation : SbObject
 {
-    public required AssetId[] Frames { get; init; }
+    public required AssetId BasePath { get; init; }
+    public required int FrameCount { get; init; }
     public required double FrameDelayMs { get; init; }
     public SbLoopType LoopType { get; init; } = SbLoopType.LoopForever;
+
+    public AssetId FramePath(int frameIndex) => new(BasePath.RelativePath.Replace(".", $"{frameIndex}."));
 }

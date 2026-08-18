@@ -33,10 +33,12 @@ public static class ReportTables
         compression.AddColumn("");
         compression.HideHeaders();
         compression.AddRow("Raw frames", EncodeLiveView.FormatBytes(s.RawFrameBytes));
+        compression.AddRow("Naive (frame-per-sprite, est.)", EncodeLiveView.FormatBytes(s.NaiveEstimatedBytes));
         compression.AddRow("Source file", EncodeLiveView.FormatBytes(s.SourceFileBytes));
         compression.AddRow(".osb", EncodeLiveView.FormatBytes(s.OsbFileBytes));
         compression.AddRow("Assets", EncodeLiveView.FormatBytes(s.AssetBytes));
         compression.AddRow("Reduction vs. raw frames", $"{s.ReductionVsRawFrames:P2}");
+        compression.AddRow("Reduction vs. naive", $"{s.ReductionVsNaive:P2}");
         compression.AddRow("Reduction vs. source file", $"{s.ReductionVsSourceFile:P2}");
         compression.AddRow("Encode time", s.EncodeTime.ToString(@"mm\:ss\.ff"));
         AnsiConsole.Write(compression);

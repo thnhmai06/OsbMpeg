@@ -20,6 +20,12 @@ public sealed class TileGrid
         Rows = (canvasHeight + tileSize - 1) / tileSize;
     }
 
+    /// <summary>False for the last row/column when the canvas isn't an exact multiple of
+    /// TileSize — those tiles are cropped and can't participate in a power-of-two quadtree
+    /// merge (ragged block dimensions), so the merger skips them and leaves them at base
+    /// granularity.</summary>
+    public bool IsFullTile(int col, int row) => col * TileSize + TileSize <= CanvasWidth && row * TileSize + TileSize <= CanvasHeight;
+
     public (int X, int Y, int Width, int Height) TileBounds(int col, int row)
     {
         var x = col * TileSize;

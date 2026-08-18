@@ -101,9 +101,9 @@ public sealed class SoftwareStoryboardRenderer
     {
         var index = (int)((t - earliestStart) / a.FrameDelayMs);
         index = a.LoopType == SbLoopType.LoopForever
-            ? ((index % a.Frames.Length) + a.Frames.Length) % a.Frames.Length
-            : Math.Clamp(index, 0, a.Frames.Length - 1);
-        return a.Frames[index];
+            ? ((index % a.FrameCount) + a.FrameCount) % a.FrameCount
+            : Math.Clamp(index, 0, a.FrameCount - 1);
+        return a.FramePath(index);
     }
 
     private SpriteFrame LoadAsset(AssetId id)

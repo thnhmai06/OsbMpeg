@@ -2,11 +2,14 @@ using OsbMpeg.Media;
 
 namespace OsbMpeg.Analysis;
 
-/// <summary>One closed run of a tile: content stayed the same (by quantized-hash equality)
-/// from StartMs to EndMs. Rgb is the tight-packed Rgb24 snapshot taken on the frame the run
-/// started — later frames in the run are assumed identical, which is exactly what the hash
-/// match asserts.</summary>
-public sealed record TileRun(int Col, int Row, double StartMs, double EndMs, byte[] Rgb, int Width, int Height);
+/// <summary>One closed run of a tile (or, after QuadtreeMerger, a merged block of tiles):
+/// content stayed the same (by quantized-hash equality) from StartMs to EndMs. Rgb is the
+/// tight-packed Rgb24 snapshot taken on the frame the run started — later frames in the run
+/// are assumed identical, which is exactly what the hash match asserts. Col/Row identify the
+/// top-left base tile's grid position (used for spatial grouping in the merger); PixelX/PixelY/
+/// Width/Height are the actual canvas-pixel footprint, which for a merged run spans multiple
+/// base tiles.</summary>
+public sealed record TileRun(int Col, int Row, int PixelX, int PixelY, int Width, int Height, double StartMs, double EndMs, byte[] Rgb);
 
 /// <summary>Per-tile state machine driving the conditional-replenishment backbone: as long
 /// as a tile's content hash doesn't change, its current run just extends; a hash change closes
@@ -40,7 +43,7 @@ public sealed class TileRunTracker
             for (var col = 0; col < _grid.Cols; col++)
             {
                 var index = row * _grid.Cols + col;
-                var (_, _, w, h) = _grid.TileBounds(col, row);
+                var (x, y, w, h) = _grid.TileBounds(col, row);
                 var tile = _scratch.AsSpan(0, w * h * 3);
                 _grid.ExtractTile(frame.Rgb, col, row, tile);
                 var hash = ContentHasher.Hash(tile, _hashQuantLevels);
@@ -49,7 +52,7 @@ public sealed class TileRunTracker
                     continue;
 
                 if (_currentHash[index] is not null)
-                    closed.Add(new TileRun(col, row, _runStartMs[index], frameMs, _runSnapshot[index]!, w, h));
+                    closed.Add(new TileRun(col, row, x, y, w, h, _runStartMs[index], frameMs, _runSnapshot[index]!));
 
                 _currentHash[index] = hash;
                 _runStartMs[index] = frameMs;
@@ -72,8 +75,8 @@ public sealed class TileRunTracker
                 if (_currentHash[index] is null)
                     continue;
 
-                var (_, _, w, h) = _grid.TileBounds(col, row);
-                closed.Add(new TileRun(col, row, _runStartMs[index], endMs, _runSnapshot[index]!, w, h));
+                var (x, y, w, h) = _grid.TileBounds(col, row);
+                closed.Add(new TileRun(col, row, x, y, w, h, _runStartMs[index], endMs, _runSnapshot[index]!));
             }
         }
         return closed;

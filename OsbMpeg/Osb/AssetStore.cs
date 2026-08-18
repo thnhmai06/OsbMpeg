@@ -58,6 +58,29 @@ public sealed class AssetStore
             return existing;
 
         var fileName = $"{_namePrefix}{_counter++}.png";
+        var id = SavePng(fileName, rgb, width, height);
+        _dedupe[key] = id;
+        return id;
+    }
+
+    /// <summary>Writes an Animation's frame sequence. Frame files are named per osu!'s own
+    /// derivation rule — the returned AssetId is a template path with exactly one dot; frame i
+    /// lives at template.Replace(".", "{i}."), matching SbAnimation.FramePath. Not
+    /// content-hash deduped: Animation frames forfeit cross-tile dedupe by construction (a
+    /// frame's filename is positionally fixed by its index, it can't alias another file), so
+    /// there's nothing to look up.</summary>
+    public AssetId WriteAnimation(IReadOnlyList<byte[]> frames, int width, int height)
+    {
+        var baseFileName = $"{_namePrefix}a{_counter++}.png";
+
+        for (var i = 0; i < frames.Count; i++)
+            SavePng(baseFileName.Replace(".", $"{i}."), frames[i], width, height);
+
+        return new AssetId($"{_relativeDir}/{baseFileName}");
+    }
+
+    private AssetId SavePng(string fileName, ReadOnlySpan<byte> rgb, int width, int height)
+    {
         var absolute = Path.Combine(_absoluteDir, fileName);
 
         using (var image = Image.LoadPixelData<Rgb24>(rgb, width, height))
@@ -70,10 +93,8 @@ public sealed class AssetStore
             image.SaveAsPng(absolute, new PngEncoder { CompressionLevel = _compressionLevel });
         }
 
-        var id = new AssetId($"{_relativeDir}/{fileName}");
-        _dedupe[key] = id;
         FileCount++;
         TotalBytes += new FileInfo(absolute).Length;
-        return id;
+        return new AssetId($"{_relativeDir}/{fileName}");
     }
 }

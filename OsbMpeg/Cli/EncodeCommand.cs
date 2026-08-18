@@ -45,8 +45,10 @@ public sealed class EncodeCommand : AsyncCommand<EncodeSettings>
             Colors: settings.Colors,
             PngCompressionLevel: settings.PngCompression,
             FFmpegPath: settings.FFmpegPath,
+            Gop: settings.Gop,
             Start: EncodeOptions.ParseFFmpegTime(settings.Start),
-            Duration: EncodeOptions.ParseFFmpegTime(settings.Duration));
+            Duration: EncodeOptions.ParseFFmpegTime(settings.Duration),
+            MaxAssetPixels: settings.MaxAssetPixels);
 
         var pipeline = new EncodePipeline(options);
         var stats = await EncodeLiveView.RunAsync(pipeline, !settings.NoProgress);
@@ -55,6 +57,14 @@ public sealed class EncodeCommand : AsyncCommand<EncodeSettings>
 
         if (settings.StatsJson is not null)
             await File.WriteAllTextAsync(settings.StatsJson, stats.ToJson());
+
+        if (settings.PackOsz)
+        {
+            var oszPath = Path.ChangeExtension(options.OutputPath, ".osz");
+            var title = Path.GetFileNameWithoutExtension(settings.Input);
+            await OszPacker.PackAsync(options.OutputPath, options.AssetDir, stats.Duration, title, oszPath);
+            AnsiConsole.MarkupLineInterpolated($"[green]packed[/] {oszPath}");
+        }
 
         return 0;
     }
