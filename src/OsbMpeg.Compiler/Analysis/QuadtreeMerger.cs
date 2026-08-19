@@ -16,7 +16,13 @@ namespace OsbMpeg.Compiler.Analysis;
 /// </summary>
 public static class QuadtreeMerger
 {
-    public static List<TileRun> Merge(List<TileRun> batch, TileGrid grid, long maxAssetPixels)
+    // Same rounding-safety margin as AnimationDetector's isSingleFrame check, and for the same
+    // reason: millisecond-quantized frame boundaries land 1ms apart depending on rounding
+    // direction, so "is this run exactly one frame long" needs slack wider than that jitter.
+    private const double SingleFrameToleranceMs = 1.0;
+
+    public static List<TileRun> Merge(List<TileRun> batch, TileGrid grid, long maxAssetPixels,
+        double frameDurationMs)
     {
         if (batch.Count < 4)
             return batch;
@@ -34,17 +40,17 @@ public static class QuadtreeMerger
             var blockTiles = 1 << level;
             for (var row = 0; row + blockTiles <= grid.Rows; row += blockTiles)
             for (var col = 0; col + blockTiles <= grid.Cols; col += blockTiles)
-                if (TryMergeBlock(byPos, consumed, grid, col, row, blockTiles, out var merged))
+                if (TryMergeBlock(byPos, consumed, grid, col, row, blockTiles, frameDurationMs, out var merged))
                     result.Add(merged);
         }
         result.AddRange(batch.Where(run => !consumed.Contains((run.Col, run.Row))));
-        
+
         return result;
     }
 
     private static bool TryMergeBlock(
         Dictionary<(int Col, int Row), TileRun> byPos, HashSet<(int Col, int Row)> consumed,
-        TileGrid grid, int col, int row, int blockTiles, out TileRun merged)
+        TileGrid grid, int col, int row, int blockTiles, double frameDurationMs, out TileRun merged)
     {
         merged = null!;
         TileRun? first = null;
@@ -61,6 +67,18 @@ public static class QuadtreeMerger
             if (!run.StartMs.IsEqual(first.StartMs) || !run.EndMs.IsEqual(first.EndMs))
                 return false;
         }
+
+        // All sub-tiles closing at the exact same instant is necessary but not sufficient
+        // evidence of genuinely-shared static content: on high-motion regions, tiles that
+        // individually thrash every frame also close in lockstep purely from being equally
+        // volatile, with nothing in common. A block whose shared duration is itself only one
+        // frame long is that degenerate case -- a real "became static together" merge spans
+        // multiple frames by definition. Merging it anyway is strictly worse than leaving the
+        // sub-tiles separate: AnimationDetector excludes merged blocks from animation
+        // consideration by construction, so this would forfeit each sub-tile's own shot at
+        // becoming a cheap SbAnimation candidate for zero benefit.
+        if ((first!.EndMs - first.StartMs).IsEqual(frameDurationMs, SingleFrameToleranceMs))
+            return false;
 
         var tileSize = grid.TileSize;
         var blockSize = blockTiles * tileSize;

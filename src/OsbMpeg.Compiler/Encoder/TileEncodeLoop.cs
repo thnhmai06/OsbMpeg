@@ -38,7 +38,9 @@ public static class TileEncodeLoop
                 frameCount++;
 
                 var batch = tracker.Advance(frame, lastMs);
-                var merged = o.NoQuadtree ? batch : QuadtreeMerger.Merge(batch, grid, o.MaxAssetPixels);
+                var merged = o.NoQuadtree
+                    ? batch
+                    : QuadtreeMerger.Merge(batch, grid, o.MaxAssetPixels, 1000.0 / o.Fps);
                 var (sprites, animations) = animationDetector.Process(merged, o.TileSize);
                 Emit(sprites, animations, assetStore, o.Targets);
 
@@ -46,7 +48,9 @@ public static class TileEncodeLoop
             }
 
         var finalBatch = tracker.Flush(lastMs);
-        var finalMerged = o.NoQuadtree ? finalBatch : QuadtreeMerger.Merge(finalBatch, grid, o.MaxAssetPixels);
+        var finalMerged = o.NoQuadtree
+            ? finalBatch
+            : QuadtreeMerger.Merge(finalBatch, grid, o.MaxAssetPixels, 1000.0 / o.Fps);
         var (finalSprites, finalAnimations) = animationDetector.Process(finalMerged, o.TileSize);
         Emit(finalSprites, finalAnimations, assetStore, o.Targets);
 
