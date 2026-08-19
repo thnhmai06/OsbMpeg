@@ -2,6 +2,7 @@ using System.Diagnostics;
 using OsbMpeg.Compiler.Media;
 using OsbMpeg.Compiler.Osb;
 using OsbMpeg.Parsers.Ir;
+using OsbMpeg.Parsers.Ir.Passes;
 using OsbMpeg.Parsers.Osb;
 
 namespace OsbMpeg.Compiler.Encoder;
@@ -47,6 +48,10 @@ public sealed class EncodePipeline(EncodeOptions options)
                 doc.CommandCount, assetStore.FileCount, assetStore.TotalBytes)),
             ct);
         var frameCount = result.FrameCount;
+
+        MergeAdjacentCommands.Apply(doc);
+        DropNoOpCommands.Apply(doc);
+        LoopExtractor.Apply(doc);
 
         OsbWriter.Write(doc, options.OutputPath);
         OsbValidator.Validate(options.OutputPath, doc);
