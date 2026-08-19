@@ -7,7 +7,6 @@ namespace OsbMpeg.Parsers.Tests;
 public class OsbvParserTests
 {
     private const string Sample = """
-                                  OsbV: 1
                                   Sprite,Background,Centre,"bg.png",100,50
                                    F,0,0,1000,0,1
                                    M,0,0,500,10,20,30,40
@@ -59,10 +58,9 @@ public class OsbvParserTests
         var reparsed = OsbvParser.Parse(written.Split('\n').Select(l => l.TrimEnd('\r')));
 
         // structural reparse must match, and the printed text itself must match the
-        // handwritten source (no shorthand was used, so nothing is lost on the way out) — minus
-        // the legacy version header, which the writer no longer emits.
+        // handwritten source (no shorthand was used, so nothing is lost on the way out).
         Assert.Equal(doc.Objects.Count, reparsed.Objects.Count);
-        var expected = string.Join('\n', lines.Where(l => l.Length > 0 && l.Trim() != "OsbV: 1")) + "\n";
+        var expected = string.Join('\n', lines.Where(l => l.Length > 0)) + "\n";
         Assert.Equal(expected, written.Replace("\r\n", "\n"));
     }
 
@@ -82,14 +80,6 @@ public class OsbvParserTests
     public void ParsesWithoutVersionHeader()
     {
         var lines = new[] { "Sprite,Background,Centre,\"bg.png\",0,0" };
-        var doc = OsbvParser.Parse(lines);
-        Assert.Single(doc.Objects);
-    }
-
-    [Fact]
-    public void StillAcceptsLegacyVersionHeader()
-    {
-        var lines = new[] { "OsbV: 1", "Sprite,Background,Centre,\"bg.png\",0,0" };
         var doc = OsbvParser.Parse(lines);
         Assert.Single(doc.Objects);
     }
