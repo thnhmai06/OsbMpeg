@@ -2,7 +2,7 @@ using OsbMpeg.Cli;
 using Spectre.Console.Cli;
 
 // Default invocation: osbmpeg <input.osbv> <output.osb> <assets-dir> [--hwaccel MODE].
-// encode/decode/bench/probe/inspect are the pre-.osbv whole-canvas commands — kept as hidden
+// decode/bench/probe/inspect are the pre-.osbv whole-canvas commands — kept as hidden
 // subcommands (not shown in --help, still callable by name) purely as the regression
 // instrument that verifies the compile path against known-good baselines. They're not the
 // product surface anymore.
@@ -11,10 +11,6 @@ app.Configure(config =>
 {
     config.SetApplicationName("osbmpeg");
     config.Settings.StrictParsing = true; // unknown flags must error, not silently no-op — this bit us once already
-
-    config.AddCommand<EncodeCommand>("encode")
-        .WithDescription("Encode a video into an osu! storyboard (.osb + assets).")
-        .IsHidden();
 
     config.AddCommand<DecodeCommand>("decode")
         .WithDescription("Reconstruct a video from a storyboard (.osb + assets).")
