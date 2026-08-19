@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using System.IO.Hashing;
 using OsbMpeg.Parsers;
 
 namespace OsbMpeg.Compiler.Analysis;
@@ -139,13 +139,9 @@ public sealed class AnimationDetector(
     /// </summary>
     private static double Uniqueness(List<TileRun> runs)
     {
-        var distinct = new HashSet<string>(runs.Count);
-        Span<byte> digest = stackalloc byte[32];
+        var distinct = new HashSet<UInt128>(runs.Count);
         foreach (var r in runs)
-        {
-            SHA256.HashData(r.Rgb, digest);
-            distinct.Add(Convert.ToHexString(digest));
-        }
+            distinct.Add(XxHash128.HashToUInt128(r.Rgb, 0));
 
         return (double)distinct.Count / runs.Count;
     }

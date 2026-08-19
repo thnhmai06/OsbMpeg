@@ -59,9 +59,10 @@ public class OsbvParserTests
         var reparsed = OsbvParser.Parse(written.Split('\n').Select(l => l.TrimEnd('\r')));
 
         // structural reparse must match, and the printed text itself must match the
-        // handwritten source (no shorthand was used, so nothing is lost on the way out).
+        // handwritten source (no shorthand was used, so nothing is lost on the way out) — minus
+        // the legacy version header, which the writer no longer emits.
         Assert.Equal(doc.Objects.Count, reparsed.Objects.Count);
-        var expected = string.Join('\n', lines.Where(l => l.Length > 0)) + "\n";
+        var expected = string.Join('\n', lines.Where(l => l.Length > 0 && l.Trim() != "OsbV: 1")) + "\n";
         Assert.Equal(expected, written.Replace("\r\n", "\n"));
     }
 
@@ -78,9 +79,18 @@ public class OsbvParserTests
     }
 
     [Fact]
-    public void RejectsMissingVersionHeader()
+    public void ParsesWithoutVersionHeader()
     {
         var lines = new[] { "Sprite,Background,Centre,\"bg.png\",0,0" };
-        Assert.Throws<OsbvParseException>(() => OsbvParser.Parse(lines));
+        var doc = OsbvParser.Parse(lines);
+        Assert.Single(doc.Objects);
+    }
+
+    [Fact]
+    public void StillAcceptsLegacyVersionHeader()
+    {
+        var lines = new[] { "OsbV: 1", "Sprite,Background,Centre,\"bg.png\",0,0" };
+        var doc = OsbvParser.Parse(lines);
+        Assert.Single(doc.Objects);
     }
 }

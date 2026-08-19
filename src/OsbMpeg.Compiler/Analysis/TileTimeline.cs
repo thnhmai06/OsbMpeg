@@ -71,7 +71,7 @@ public sealed class TileRunTracker
 {
     private readonly byte[] _canonicalScratch;
     private readonly bool _canonicalSnapshot;
-    private readonly ulong?[] _currentHash;
+    private readonly UInt128?[] _currentHash;
     private readonly TileGrid _grid;
     private readonly int _hashQuantLevels;
     private readonly byte[]?[] _runSnapshot;
@@ -101,7 +101,7 @@ public sealed class TileRunTracker
         _hashQuantLevels = hashQuantLevels;
         _canonicalSnapshot = canonicalSnapshot;
         _tolerance = tolerance;
-        _currentHash = new ulong?[grid.TileCount];
+        _currentHash = new UInt128?[grid.TileCount];
         _runStartMs = new double[grid.TileCount];
         _runSnapshot = new byte[grid.TileCount][];
         _scratch = new byte[grid.TileSize * grid.TileSize * 3];

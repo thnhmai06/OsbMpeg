@@ -15,6 +15,9 @@ namespace OsbMpeg.Parsers.Osbv;
 ///     leading space/underscore characters (identical weight, matching .osb), and a line at
 ///     depth d attaches to the nearest still-open frame at depth d-1. That's what lets L nest
 ///     inside L arbitrarily deep, same as inside a real .osb.
+///     No mandatory version header: a leading "OsbV: 1" line is accepted (for old files) and
+///     discarded, but never required — a bare object list, exactly the shape a real .osb's
+///     [Events] object lines already are, parses unchanged.
 /// </summary>
 public static class OsbvParser
 {
@@ -27,7 +30,7 @@ public static class OsbvParser
     {
         var doc = new OsbvDocument();
         var lineNo = 0;
-        var sawHeader = false;
+        var sawFirstContentLine = false;
 
         OsbvObject? currentObject = null;
         var stack = new List<(int Depth, List<SbCommand> Target)>();
@@ -42,13 +45,13 @@ public static class OsbvParser
             if (trimmedStart.Length == 0 || trimmedStart.StartsWith("//"))
                 continue;
 
-            if (!sawHeader)
+            if (!sawFirstContentLine)
             {
-                if (trimmedStart.TrimEnd() != "OsbV: 1")
-                    throw new OsbvParseException(lineNo,
-                        $"expected version header \"OsbV: 1\", got \"{trimmedStart.TrimEnd()}\"");
-                sawHeader = true;
-                continue;
+                sawFirstContentLine = true;
+                // Legacy "OsbV: 1" header is optional now — accepted and discarded if present,
+                // so plain .osb-shaped object lists (which never had one) parse unchanged too.
+                if (trimmedStart.TrimEnd() == "OsbV: 1")
+                    continue;
             }
 
             var depth = raw.Length - trimmedStart.Length;
@@ -87,9 +90,7 @@ public static class OsbvParser
             }
         }
 
-        return sawHeader
-            ? doc
-            : throw new OsbvParseException(lineNo, "empty file — missing version header \"OsbV: 1\"");
+        return doc;
     }
 
     private static OsbvObject ParseObjectHeader(List<string> f, int lineNo)

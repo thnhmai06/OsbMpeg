@@ -30,7 +30,6 @@ public static class OsbvWriter
 
     private static void Write(OsbvDocument doc, TextWriter w)
     {
-        w.WriteLine("OsbV: 1");
         foreach (var obj in doc.Objects)
         {
             WriteHeader(w, obj);
