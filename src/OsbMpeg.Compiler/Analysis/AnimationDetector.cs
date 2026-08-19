@@ -72,7 +72,14 @@ public sealed class AnimationDetector(
             }
 
             var pos = (run.Col, run.Row);
-            var isSingleFrame = (run.EndMs - run.StartMs).IsEqual(_frameDurationMs, 0.5);
+            // Millisecond-quantized frame boundaries alternate between floor and ceil of the true
+            // (fractional) frame duration -- e.g. at 30fps (33.333ms/frame) real single-frame runs
+            // measure 33ms two-thirds of the time and 34ms the rest. A tolerance under ~1ms only
+            // ever matches one side of that split, misclassifying the other as a "stable" run and
+            // fragmenting what should be one continuous accumulation into many too-short pieces
+            // that never reach minAnimationFrames. 1ms safely covers both sides of the rounding
+            // split while staying far short of a genuine 2-frame run (~2x this duration away).
+            var isSingleFrame = (run.EndMs - run.StartMs).IsEqual(_frameDurationMs, 1.0);
 
             if (isSingleFrame)
             {
