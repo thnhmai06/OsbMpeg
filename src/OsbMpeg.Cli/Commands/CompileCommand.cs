@@ -29,7 +29,7 @@ public sealed class CompileCommand : AsyncCommand<CompileSettings>
         }
 
         var result = await VideoCompiler.CompileAsync(document, settings.AssetDir, settings.Output, settings.HwAccel,
-            cancellationToken);
+            msg => AnsiConsole.MarkupLineInterpolated($"[grey]{msg}[/]"), cancellationToken);
 
         AnsiConsole.MarkupLineInterpolated($"[green]compiled[/] {settings.Output}");
         AnsiConsole.MarkupLineInterpolated(

@@ -20,7 +20,7 @@ public static class TileEncodeLoop
 {
     public static async Task<Result> RunAsync(
         Options o, AssetStore assetStore,
-        Action<int, double>? onProgress, CancellationToken ct)
+        Action<int, double>? onProgress, CancellationToken ct, Action<VideoFrame, double>? onFrame = null)
     {
         var grid = new TileGrid(o.Width, o.Height, o.TileSize);
         var tracker = new TileRunTracker(grid, o.HashQuantLevels, !o.RawSnapshot, o.TileTolerance);
@@ -36,6 +36,7 @@ public static class TileEncodeLoop
             {
                 lastMs = frame.Pts * 1000.0;
                 frameCount++;
+                onFrame?.Invoke(frame, lastMs);
 
                 var batch = tracker.Advance(frame, lastMs);
                 var merged = o.NoQuadtree

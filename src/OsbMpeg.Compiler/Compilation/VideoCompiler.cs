@@ -1,6 +1,7 @@
 using OsbMpeg.Compiler.Encoder;
 using OsbMpeg.Compiler.Media;
 using OsbMpeg.Compiler.Osb;
+using OsbMpeg.Compiler.Tuning;
 using OsbMpeg.Parsers;
 using OsbMpeg.Parsers.Ir;
 using OsbMpeg.Parsers.Ir.Passes;
@@ -49,7 +50,7 @@ public sealed record VideoCompileResult(
 public static class VideoCompiler
 {
     public static async Task<VideoCompileResult> CompileAsync(OsbvDocument document, string assetsRootDir,
-        string osbOutputPath, string? hwAccel = null, CancellationToken ct = default)
+        string osbOutputPath, string? hwAccel = null, Action<string>? log = null, CancellationToken ct = default)
     {
         var osbDir = Path.GetDirectoryName(Path.GetFullPath(osbOutputPath)) ?? ".";
         var assetsRootAbs = Path.GetFullPath(assetsRootDir);
@@ -67,6 +68,7 @@ public static class VideoCompiler
         var planByMember = plans.SelectMany(p => p.Members.Select(m => (Member: m, Plan: p)))
             .ToDictionary(t => t.Member, t => t.Plan);
         var assetStoreByPlan = new Dictionary<VideoSourcePlan, AssetStore>();
+        var tunedByPlan = new Dictionary<VideoSourcePlan, TunedParameters>();
         var consumedMembers = new HashSet<OsbvAnimationVideo>();
 
         var doc = new SbDocument();
@@ -96,16 +98,17 @@ public static class VideoCompiler
 
                     var plan = planByMember[v];
                     var info = probeCache[Path.GetFullPath(v.FilePath)];
-                    var assetStore = AssetStoreFor(plan);
+                    var tuned = await TunedFor(plan, info);
+                    var assetStore = AssetStoreFor(plan, tuned.Colors);
 
                     if (plan.Members.Count > 1 && SharesWindow(plan, info))
                     {
-                        await CompileSharedAsync(plan, info, doc, assetStore, hwAccel, ct);
+                        await CompileSharedAsync(plan, info, doc, assetStore, tuned, hwAccel, ct);
                         foreach (var m in plan.Members) consumedMembers.Add(m);
                     }
                     else
                     {
-                        await CompileMemberAsync(v, plan, info, doc, assetStore, hwAccel, ct);
+                        await CompileMemberAsync(v, plan, info, doc, assetStore, tuned, hwAccel, ct);
                         consumedMembers.Add(v);
                     }
 
@@ -129,12 +132,20 @@ public static class VideoCompiler
             return info;
         }
 
-        AssetStore AssetStoreFor(VideoSourcePlan plan)
+        AssetStore AssetStoreFor(VideoSourcePlan plan, int colors)
         {
             if (assetStoreByPlan.TryGetValue(plan, out var existing)) return existing;
             var absoluteDir = Path.Combine(assetsRootAbs, plan.VideoId);
             var relativeDir = $"{assetRelativeRoot}/{plan.VideoId}";
-            return assetStoreByPlan[plan] = new AssetStore(absoluteDir, relativeDir, "", hexNaming: true);
+            return assetStoreByPlan[plan] = new AssetStore(absoluteDir, relativeDir, "", colors, hexNaming: true);
+        }
+
+        async Task<TunedParameters> TunedFor(VideoSourcePlan plan, MediaInfo info)
+        {
+            if (tunedByPlan.TryGetValue(plan, out var existing)) return existing;
+            var tuned = await ParameterTuner.TuneAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps,
+                plan.UnionStartMs, plan.UnionEndMs - plan.UnionStartMs, log, ct);
+            return tunedByPlan[plan] = tuned;
         }
     }
 
@@ -156,7 +167,7 @@ public static class VideoCompiler
     }
 
     private static TileEncodeLoop.Options LoopOptions(string inputPath, MediaInfo info, double fps, double startMs,
-        double endMs, IReadOnlyList<TileEncodeLoop.EmitTarget> targets, string? hwAccel)
+        double endMs, TunedParameters tuned, IReadOnlyList<TileEncodeLoop.EmitTarget> targets, string? hwAccel)
     {
         return new TileEncodeLoop.Options(
             inputPath,
@@ -165,10 +176,10 @@ public static class VideoCompiler
             fps,
             TimeSpan.FromMilliseconds(startMs),
             TimeSpan.FromMilliseconds(endMs - startMs),
-            64,
-            32,
+            tuned.TileSize,
+            tuned.HashQuantLevels,
             false,
-            8, // measured win on every fixture tested — see AssetStore's JPEG-revert note for the sibling call on asset format
+            tuned.TileTolerance,
             300,
             0.8,
             false,
@@ -178,7 +189,7 @@ public static class VideoCompiler
     }
 
     private static async Task CompileMemberAsync(OsbvAnimationVideo v, VideoSourcePlan plan, MediaInfo info,
-        SbDocument doc, AssetStore assetStore, string? hwAccel, CancellationToken ct)
+        SbDocument doc, AssetStore assetStore, TunedParameters tuned, string? hwAccel, CancellationToken ct)
     {
         var (startMs, endMs) = Window(v, info);
         var mapping = new CanvasMapping(info.Width, info.Height, v.X, v.Y);
@@ -186,7 +197,8 @@ public static class VideoCompiler
             ? new GroupTransformBaker(v.Commands, (float)v.X, (float)v.Y, plan.Key.EffectiveFps)
             : null;
         var target = new TileEncodeLoop.EmitTarget(mapping, v.Layer, v.StartTimeMs, baker, doc.Add);
-        var loopOptions = LoopOptions(v.FilePath, info, plan.Key.EffectiveFps, startMs, endMs, [target], hwAccel);
+        var loopOptions =
+            LoopOptions(v.FilePath, info, plan.Key.EffectiveFps, startMs, endMs, tuned, [target], hwAccel);
 
         await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
     }
@@ -198,7 +210,7 @@ public static class VideoCompiler
     ///     in CompileMemberAsync.
     /// </summary>
     private static async Task CompileSharedAsync(VideoSourcePlan plan, MediaInfo info, SbDocument doc,
-        AssetStore assetStore, string? hwAccel, CancellationToken ct)
+        AssetStore assetStore, TunedParameters tuned, string? hwAccel, CancellationToken ct)
     {
         var (startMs, endMs) = Window(plan.Members[0], info);
         var buffers = new List<SbObject>[plan.Members.Count];
@@ -215,8 +227,8 @@ public static class VideoCompiler
             targets[i] = new TileEncodeLoop.EmitTarget(mapping, v.Layer, v.StartTimeMs, baker, buffer.Add);
         }
 
-        var loopOptions = LoopOptions(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, startMs, endMs, targets,
-            hwAccel);
+        var loopOptions = LoopOptions(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, startMs, endMs, tuned,
+            targets, hwAccel);
         await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
 
         foreach (var buffer in buffers)
