@@ -19,7 +19,7 @@ public static class TileEncodeLoop
         int TileSize, int HashQuantLevels, bool RawSnapshot, int TileTolerance, int Gop,
         double MinAnimationUniqueness, bool NoQuadtree, long MaxAssetPixels,
         SbLayer Layer = SbLayer.Background, double StoryboardTimeOffsetMs = 0,
-        GroupTransformBaker? Baker = null);
+        GroupTransformBaker? Baker = null, string? HwAccel = null);
 
     public sealed record Result(int FrameCount, double LastFrameMs);
 
@@ -30,7 +30,7 @@ public static class TileEncodeLoop
         var grid = new TileGrid(o.Width, o.Height, o.TileSize);
         var tracker = new TileRunTracker(grid, o.HashQuantLevels, canonicalSnapshot: !o.RawSnapshot, tolerance: o.TileTolerance);
         var animationDetector = new AnimationDetector(o.Fps, maxAccumulatedFrames: o.Gop, minUniqueness: o.MinAnimationUniqueness);
-        var frameOpts = new FrameSourceOptions(o.Width, o.Height, o.Fps, o.Start, o.Duration);
+        var frameOpts = new FrameSourceOptions(o.Width, o.Height, o.Fps, o.Start, o.Duration, ExtraInputArgs: o.HwAccel is { } hw ? $"-hwaccel {hw}" : null);
         var frameCount = 0;
         var lastMs = 0.0;
 

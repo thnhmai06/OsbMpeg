@@ -26,7 +26,7 @@ public sealed class CompileCommand : AsyncCommand<CompileSettings>
             return 1;
         }
 
-        var result = await VideoCompiler.CompileAsync(document, settings.AssetDir, settings.Output, cancellationToken);
+        var result = await VideoCompiler.CompileAsync(document, settings.AssetDir, settings.Output, settings.HwAccel, cancellationToken);
 
         AnsiConsole.MarkupLineInterpolated($"[green]compiled[/] {settings.Output}");
         AnsiConsole.MarkupLineInterpolated($"  sprites={result.SpriteCount} animations={result.AnimationCount} commands={result.CommandCount} assets={result.AssetCount} video-sources={result.VideoSourceCount}");

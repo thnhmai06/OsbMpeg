@@ -1,29 +1,40 @@
 using OsbMpeg.Cli;
 using Spectre.Console.Cli;
 
-var app = new CommandApp();
+// Default invocation: osbmpeg <input.osbv> <output.osb> <assets-dir> [--hwaccel MODE].
+// encode/decode/bench/probe/inspect are the pre-.osbv whole-canvas commands — kept as hidden
+// subcommands (not shown in --help, still callable by name) purely as the regression
+// instrument that verifies the compile path against known-good baselines. They're not the
+// product surface anymore.
+var app = new CommandApp<CompileCommand>();
 app.Configure(config =>
 {
     config.SetApplicationName("osbmpeg");
     config.Settings.StrictParsing = true; // unknown flags must error, not silently no-op — this bit us once already
 
     config.AddCommand<EncodeCommand>("encode")
-        .WithDescription("Encode a video into an osu! storyboard (.osb + assets).");
+        .WithDescription("Encode a video into an osu! storyboard (.osb + assets).")
+        .IsHidden();
 
     config.AddCommand<DecodeCommand>("decode")
-        .WithDescription("Reconstruct a video from a storyboard (.osb + assets).");
+        .WithDescription("Reconstruct a video from a storyboard (.osb + assets).")
+        .IsHidden();
 
     config.AddCommand<BenchCommand>("bench")
-        .WithDescription("Encode, decode, and report compression + quality metrics.");
+        .WithDescription("Encode, decode, and report compression + quality metrics.")
+        .IsHidden();
 
     config.AddCommand<ProbeCommand>("probe")
-        .WithDescription("Print media info for a video file.");
+        .WithDescription("Print media info for a video file.")
+        .IsHidden();
 
     config.AddCommand<InspectCommand>("inspect")
-        .WithDescription("Dump storyboard IR summary for a .osb file.");
+        .WithDescription("Dump storyboard IR summary for a .osb file.")
+        .IsHidden();
 
     config.AddCommand<CompileCommand>("compile")
-        .WithDescription("Compile a .osbv source file into a .osb + assets (dev-verification path; no group-transform support yet).");
+        .WithDescription("Compile a .osbv source file into a .osb + assets.")
+        .IsHidden(); // same as the default — kept addressable by name for scripts
 });
 
 return await app.RunAsync(args);

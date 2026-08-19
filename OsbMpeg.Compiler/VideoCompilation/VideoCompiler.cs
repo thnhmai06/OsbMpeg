@@ -21,7 +21,7 @@ public sealed record VideoCompileResult(int SpriteCount, int AnimationCount, int
 /// same as it always would within a single video.</summary>
 public static class VideoCompiler
 {
-    public static async Task<VideoCompileResult> CompileAsync(OsbvDocument document, string assetsRootDir, string osbOutputPath, CancellationToken ct = default)
+    public static async Task<VideoCompileResult> CompileAsync(OsbvDocument document, string assetsRootDir, string osbOutputPath, string? hwAccel = null, CancellationToken ct = default)
     {
         var osbDir = Path.GetDirectoryName(Path.GetFullPath(osbOutputPath)) ?? ".";
         var assetsRootAbs = Path.GetFullPath(assetsRootDir);
@@ -93,7 +93,8 @@ public static class VideoCompiler
                         MaxAssetPixels: 17_000_000,
                         Layer: v.Layer,
                         StoryboardTimeOffsetMs: v.StartTimeMs,
-                        Baker: baker);
+                        Baker: baker,
+                        HwAccel: hwAccel);
 
                     await TileEncodeLoop.RunAsync(loopOptions, doc, assetStore, mapping, onProgress: null, ct);
                     break;
