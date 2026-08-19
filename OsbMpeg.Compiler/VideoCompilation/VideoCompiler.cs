@@ -8,13 +8,11 @@ namespace OsbMpeg.VideoCompilation;
 
 public sealed record VideoCompileResult(int SpriteCount, int AnimationCount, int CommandCount, int AssetCount, int VideoSourceCount);
 
-/// <summary>Compiles a parsed .osbv document into a .osb + assets. This is the thinnest
-/// correct path: native Sprite/Animation objects pass straight through to IR; each
-/// AnimationVideo with no commands runs the same tile-grid encode as the old whole-canvas
-/// CLI (TileEncodeLoop), auto-cover-placed at its declared (X,Y). AnimationVideo with
-/// commands needs group-transform baking (evaluate the timeline, bake into every tile
-/// sprite) — not implemented yet, so it's a clear error instead of silently ignoring the
-/// script.
+/// <summary>Compiles a parsed .osbv document into a .osb + assets. Native Sprite/Animation
+/// objects pass straight through to IR. Each AnimationVideo runs the same tile-grid encode as
+/// the old whole-canvas CLI (TileEncodeLoop), auto-cover-placed at its declared (X,Y); if it
+/// has commands, a GroupTransformBaker bakes them into every tile — see that class for what's
+/// covered (Move/Scale/Fade/Colour/Additive) versus rejected (Rotate, flip, Loop).
 ///
 /// Decode is not shared across AnimationVideo objects that point at the same source (that's
 /// the P6 optimization VideoSourcePlanner exists to eventually drive) — each member gets its
@@ -63,9 +61,6 @@ public static class VideoCompiler
                     break;
 
                 case OsbvAnimationVideo v:
-                    if (v.Commands.Count > 0)
-                        throw new NotSupportedException($"AnimationVideo,\"{v.FilePath}\" has commands — group-transform baking isn't implemented yet (V1). Remove them or wait for the baking pass.");
-
                     var plan = planByMember[v];
                     var info = probeCache[Path.GetFullPath(v.FilePath)];
                     if (!assetStoreByPlan.TryGetValue(plan, out var assetStore))
@@ -78,6 +73,9 @@ public static class VideoCompiler
                     var startMs = v.VideoStartMs ?? 0;
                     var endMs = v.VideoEndMs ?? info.Duration.TotalMilliseconds;
                     var mapping = new CanvasMapping(info.Width, info.Height, v.X, v.Y);
+                    var baker = v.Commands.Count > 0
+                        ? new GroupTransformBaker(v.Commands, (float)v.X, (float)v.Y, plan.Key.EffectiveFps)
+                        : null;
                     var loopOptions = new TileEncodeLoop.Options(
                         InputPath: v.FilePath,
                         Width: info.Width,
@@ -94,7 +92,8 @@ public static class VideoCompiler
                         NoQuadtree: false,
                         MaxAssetPixels: 17_000_000,
                         Layer: v.Layer,
-                        StoryboardTimeOffsetMs: v.StartTimeMs);
+                        StoryboardTimeOffsetMs: v.StartTimeMs,
+                        Baker: baker);
 
                     await TileEncodeLoop.RunAsync(loopOptions, doc, assetStore, mapping, onProgress: null, ct);
                     break;

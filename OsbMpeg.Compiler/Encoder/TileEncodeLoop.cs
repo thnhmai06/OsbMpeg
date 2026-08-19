@@ -2,6 +2,7 @@ using OsbMpeg.Analysis;
 using OsbMpeg.Ir;
 using OsbMpeg.Media;
 using OsbMpeg.Osb;
+using OsbMpeg.VideoCompilation;
 
 namespace OsbMpeg.Encoder;
 
@@ -17,7 +18,8 @@ public static class TileEncodeLoop
         string InputPath, int Width, int Height, double Fps, TimeSpan? Start, TimeSpan? Duration,
         int TileSize, int HashQuantLevels, bool RawSnapshot, int TileTolerance, int Gop,
         double MinAnimationUniqueness, bool NoQuadtree, long MaxAssetPixels,
-        SbLayer Layer = SbLayer.Background, double StoryboardTimeOffsetMs = 0);
+        SbLayer Layer = SbLayer.Background, double StoryboardTimeOffsetMs = 0,
+        GroupTransformBaker? Baker = null);
 
     public sealed record Result(int FrameCount, double LastFrameMs);
 
@@ -42,7 +44,7 @@ public static class TileEncodeLoop
                 var batch = tracker.Advance(frame, lastMs);
                 var merged = o.NoQuadtree ? batch : QuadtreeMerger.Merge(batch, grid, o.MaxAssetPixels);
                 var (sprites, animations) = animationDetector.Process(merged, o.TileSize);
-                Emit(sprites, animations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs);
+                Emit(sprites, animations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs, o.Baker);
 
                 onProgress?.Invoke(frameCount, frame.Pts);
             }
@@ -51,71 +53,67 @@ public static class TileEncodeLoop
         var finalBatch = tracker.Flush(lastMs);
         var finalMerged = o.NoQuadtree ? finalBatch : QuadtreeMerger.Merge(finalBatch, grid, o.MaxAssetPixels);
         var (finalSprites, finalAnimations) = animationDetector.Process(finalMerged, o.TileSize);
-        Emit(finalSprites, finalAnimations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs);
+        Emit(finalSprites, finalAnimations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs, o.Baker);
 
         var (tailSprites, tailAnimations) = animationDetector.FlushAll();
-        Emit(tailSprites, tailAnimations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs);
+        Emit(tailSprites, tailAnimations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs, o.Baker);
 
         return new Result(frameCount, lastMs);
     }
 
-    private static void Emit(List<TileRun> runs, List<AnimationCandidate> candidates, SbDocument doc, AssetStore assetStore, CanvasMapping mapping, SbLayer layer, double timeOffsetMs)
+    private static void Emit(List<TileRun> runs, List<AnimationCandidate> candidates, SbDocument doc, AssetStore assetStore, CanvasMapping mapping, SbLayer layer, double timeOffsetMs, GroupTransformBaker? baker)
     {
         foreach (var run in runs)
         {
-            var (sbX, sbY) = mapping.PixelToStoryboard(run.PixelX, run.PixelY);
             var asset = assetStore.GetOrAdd(run.Rgb, run.Width, run.Height, AssetConsumer.Sprite);
-            var scale = (float)mapping.StoryboardScale;
 
-            doc.Add(new SbSprite
+            if (baker is null)
             {
-                Layer = layer,
-                Origin = SbOrigin.TopLeft,
-                X = (float)sbX,
-                Y = (float)sbY,
-                Asset = asset,
-                Commands =
-                [
-                    new SbValueCommand
-                    {
-                        Kind = SbCommandKind.Scale,
-                        StartMs = run.StartMs + timeOffsetMs,
-                        EndMs = run.EndMs + timeOffsetMs,
-                        Start = scale,
-                        End = scale,
-                    },
-                ],
-            });
+                var (sbX, sbY) = mapping.PixelToStoryboard(run.PixelX, run.PixelY);
+                var scale = (float)mapping.StoryboardScale;
+                doc.Add(new SbSprite
+                {
+                    Layer = layer,
+                    Origin = SbOrigin.TopLeft,
+                    X = (float)sbX,
+                    Y = (float)sbY,
+                    Asset = asset,
+                    Commands = [new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = run.StartMs + timeOffsetMs, EndMs = run.EndMs + timeOffsetMs, Start = scale, End = scale }],
+                });
+                continue;
+            }
+
+            var (centerX, centerY) = mapping.PixelToStoryboard(run.PixelX + run.Width / 2.0, run.PixelY + run.Height / 2.0);
+            var (bx, by, commands) = baker.Bake(centerX, centerY, mapping.StoryboardScale, run.StartMs, run.EndMs, timeOffsetMs);
+            doc.Add(new SbSprite { Layer = layer, Origin = SbOrigin.Centre, X = bx, Y = by, Asset = asset, Commands = commands });
         }
 
         foreach (var c in candidates)
         {
-            var (sbX, sbY) = mapping.PixelToStoryboard(c.PixelX, c.PixelY);
             var basePath = assetStore.WriteAnimation(c.Frames, c.Width, c.Height);
-            var scale = (float)mapping.StoryboardScale;
 
-            doc.Add(new SbAnimation
+            if (baker is null)
             {
-                Layer = layer,
-                Origin = SbOrigin.TopLeft,
-                X = (float)sbX,
-                Y = (float)sbY,
-                BasePath = basePath,
-                FrameCount = c.Frames.Count,
-                FrameDelayMs = c.FrameDelayMs,
-                LoopType = SbLoopType.LoopOnce,
-                Commands =
-                [
-                    new SbValueCommand
-                    {
-                        Kind = SbCommandKind.Scale,
-                        StartMs = c.StartMs + timeOffsetMs,
-                        EndMs = c.EndMs + timeOffsetMs,
-                        Start = scale,
-                        End = scale,
-                    },
-                ],
-            });
+                var (sbX, sbY) = mapping.PixelToStoryboard(c.PixelX, c.PixelY);
+                var scale = (float)mapping.StoryboardScale;
+                doc.Add(new SbAnimation
+                {
+                    Layer = layer,
+                    Origin = SbOrigin.TopLeft,
+                    X = (float)sbX,
+                    Y = (float)sbY,
+                    BasePath = basePath,
+                    FrameCount = c.Frames.Count,
+                    FrameDelayMs = c.FrameDelayMs,
+                    LoopType = SbLoopType.LoopOnce,
+                    Commands = [new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = c.StartMs + timeOffsetMs, EndMs = c.EndMs + timeOffsetMs, Start = scale, End = scale }],
+                });
+                continue;
+            }
+
+            var (centerX, centerY) = mapping.PixelToStoryboard(c.PixelX + c.Width / 2.0, c.PixelY + c.Height / 2.0);
+            var (bx, by, commands) = baker.Bake(centerX, centerY, mapping.StoryboardScale, c.StartMs, c.EndMs, timeOffsetMs);
+            doc.Add(new SbAnimation { Layer = layer, Origin = SbOrigin.Centre, X = bx, Y = by, BasePath = basePath, FrameCount = c.Frames.Count, FrameDelayMs = c.FrameDelayMs, LoopType = SbLoopType.LoopOnce, Commands = commands });
         }
     }
 }
