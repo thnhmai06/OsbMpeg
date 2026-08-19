@@ -40,7 +40,7 @@ public sealed class SoftwareStoryboardRenderer
             {
                 if (!obj.HasCommands)
                     continue; // never instantiated by the real renderer either
-                var (start, end) = Lifetime(obj);
+                var (start, end) = CommandEvaluator.Lifetime(obj.Commands);
                 _renderList.Add((obj, start, end));
             }
         }
@@ -70,17 +70,17 @@ public sealed class SoftwareStoryboardRenderer
         if (frame.Width == 0 || frame.Height == 0)
             return;
 
-        var alpha = Flicker(EvaluateScalar(obj.Commands, SbCommandKind.Fade, t, 1f));
-        var scaleUniform = EvaluateScalar(obj.Commands, SbCommandKind.Scale, t, 1f);
-        var vectorScaleX = EvaluateScalar(obj.Commands, SbCommandKind.VectorScaleX, t, 1f);
-        var vectorScaleY = EvaluateScalar(obj.Commands, SbCommandKind.VectorScaleY, t, 1f);
-        var rotation = EvaluateScalar(obj.Commands, SbCommandKind.Rotate, t, 0f);
-        var x = EvaluateScalar(obj.Commands, SbCommandKind.MoveX, t, obj.X);
-        var y = EvaluateScalar(obj.Commands, SbCommandKind.MoveY, t, obj.Y);
-        var (colR, colG, colB) = EvaluateColour(obj.Commands, t);
-        var flipH = EvaluateFlag(obj.Commands, SbCommandKind.FlipH, t);
-        var flipV = EvaluateFlag(obj.Commands, SbCommandKind.FlipV, t);
-        var additive = EvaluateFlag(obj.Commands, SbCommandKind.Additive, t);
+        var alpha = CommandEvaluator.Flicker(CommandEvaluator.EvaluateScalar(obj.Commands, SbCommandKind.Fade, t, 1f));
+        var scaleUniform = CommandEvaluator.EvaluateScalar(obj.Commands, SbCommandKind.Scale, t, 1f);
+        var vectorScaleX = CommandEvaluator.EvaluateScalar(obj.Commands, SbCommandKind.VectorScaleX, t, 1f);
+        var vectorScaleY = CommandEvaluator.EvaluateScalar(obj.Commands, SbCommandKind.VectorScaleY, t, 1f);
+        var rotation = CommandEvaluator.EvaluateScalar(obj.Commands, SbCommandKind.Rotate, t, 0f);
+        var x = CommandEvaluator.EvaluateScalar(obj.Commands, SbCommandKind.MoveX, t, obj.X);
+        var y = CommandEvaluator.EvaluateScalar(obj.Commands, SbCommandKind.MoveY, t, obj.Y);
+        var (colR, colG, colB) = CommandEvaluator.EvaluateColour(obj.Commands, t);
+        var flipH = CommandEvaluator.EvaluateFlag(obj.Commands, SbCommandKind.FlipH, t);
+        var flipV = CommandEvaluator.EvaluateFlag(obj.Commands, SbCommandKind.FlipV, t);
+        var additive = CommandEvaluator.EvaluateFlag(obj.Commands, SbCommandKind.Additive, t);
 
         var (px, py) = _mapping.StoryboardToPixel(x, y);
         var scaleX = scaleUniform * vectorScaleX * (flipH ? -1 : 1) * _mapping.ScaleToCanvas;
@@ -120,10 +120,6 @@ public sealed class SoftwareStoryboardRenderer
         return frame;
     }
 
-    /// <summary>lazer reproduces a stable exploit where alpha values above 1 wrap instead of
-    /// clamping, used deliberately by storyboarders for flicker effects.</summary>
-    private static float Flicker(float alpha) => alpha > 1 ? alpha % 1 : alpha;
-
     private static (double X, double Y) OriginFraction(SbOrigin origin) => origin switch
     {
         SbOrigin.TopLeft => (0, 0),
@@ -139,119 +135,4 @@ public sealed class SoftwareStoryboardRenderer
         _ => (0, 0),
     };
 
-    /// <summary>Active span: earliest start to latest end across all non-trigger top-level
-    /// commands (matches EarliestTransformTime / EndTimeForDisplay). Loop spans use the loop's
-    /// own start plus (max relative child end) * effective iteration count, min 1 iteration.</summary>
-    private static (double Start, double End) Lifetime(SbObject obj)
-    {
-        var start = double.MaxValue;
-        var end = double.MinValue;
-
-        foreach (var c in obj.Commands)
-        {
-            if (c is SbTrigger)
-                continue;
-
-            var (s, e) = c is SbLoop loop ? LoopSpan(loop) : (c.StartMs, c.EndMs);
-            start = Math.Min(start, s);
-            end = Math.Max(end, e);
-        }
-
-        return start == double.MaxValue ? (0, 0) : (start, end);
-    }
-
-    private static (double Start, double End) LoopSpan(SbLoop loop)
-    {
-        var childEnd = 0.0;
-        foreach (var c in loop.Children)
-        {
-            if (c is SbTrigger)
-                continue;
-            childEnd = Math.Max(childEnd, c.EndMs);
-        }
-
-        var iterations = Math.Max(0, loop.Count - 1) + 1;
-        return (loop.StartMs, loop.StartMs + childEnd * iterations);
-    }
-
-    private static float EvaluateScalar(List<SbCommand> commands, SbCommandKind kind, double t, float defaultValue)
-    {
-        SbValueCommand? active = null;
-        SbValueCommand? last = null;
-        SbValueCommand? first = null;
-
-        foreach (var c in commands)
-        {
-            if (c is not SbValueCommand v || v.Kind != kind)
-                continue;
-            first ??= v;
-            if (t >= v.StartMs && t <= v.EndMs)
-                active = v;
-            if (last is null || v.EndMs >= last.EndMs)
-                last = v;
-        }
-
-        if (first is null)
-            return defaultValue;
-        if (active is not null)
-        {
-            if (active.StartMs == active.EndMs)
-                return active.End;
-            var p = (t - active.StartMs) / (active.EndMs - active.StartMs);
-            return Lerp(active.Start, active.End, (float)EasingTable.Apply(active.Easing, p));
-        }
-
-        return t < first.StartMs ? first.Start : last!.End;
-    }
-
-    private static (byte R, byte G, byte B) EvaluateColour(List<SbCommand> commands, double t)
-    {
-        SbColourCommand? active = null;
-        SbColourCommand? last = null;
-        SbColourCommand? first = null;
-
-        foreach (var c in commands)
-        {
-            if (c is not SbColourCommand v)
-                continue;
-            first ??= v;
-            if (t >= v.StartMs && t <= v.EndMs)
-                active = v;
-            if (last is null || v.EndMs >= last.EndMs)
-                last = v;
-        }
-
-        if (first is null)
-            return (SbColor.White.R, SbColor.White.G, SbColor.White.B);
-
-        if (active is not null)
-        {
-            if (active.StartMs == active.EndMs)
-                return (active.End.R, active.End.G, active.End.B);
-            var p = (float)EasingTable.Apply(active.Easing, (t - active.StartMs) / (active.EndMs - active.StartMs));
-            return (
-                (byte)Lerp(active.Start.R, active.End.R, p),
-                (byte)Lerp(active.Start.G, active.End.G, p),
-                (byte)Lerp(active.Start.B, active.End.B, p));
-        }
-
-        var c2 = t < first.StartMs ? first.Start : last!.End;
-        return (c2.R, c2.G, c2.B);
-    }
-
-    /// <summary>P command semantics: StartMs==EndMs makes it permanent from that point on
-    /// (never reverts); otherwise it is only active during [StartMs,EndMs).</summary>
-    private static bool EvaluateFlag(List<SbCommand> commands, SbCommandKind kind, double t)
-    {
-        foreach (var c in commands)
-        {
-            if (c is not SbFlagCommand f || f.Kind != kind)
-                continue;
-            if (f.StartMs == f.EndMs ? t >= f.StartMs : t >= f.StartMs && t < f.EndMs)
-                return true;
-        }
-        return false;
-    }
-
-    private static float Lerp(float a, float b, float t) => a + (b - a) * t;
 }
