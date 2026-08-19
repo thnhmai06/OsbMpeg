@@ -103,7 +103,22 @@ public class GroupTransformBakerTests
     }
 
     [Fact]
-    public void RejectsLoop() =>
-        Assert.Throws<NotSupportedException>(() => new GroupTransformBaker(
-            [new SbLoop { StartMs = 0, EndMs = 0, Count = 2, Children = [] }], 0, 0, 30));
+    public void LoopedFade_BakesAsIfFlattened()
+    {
+        // Loop starting at 0, 2 iterations of a 500ms fade-in -> equivalent to two separate
+        // fades at [0,500] and [500,1000]. Sampling a run that only covers the second
+        // iteration should see the fade restart from 0, not continue from where the first
+        // iteration left off.
+        List<SbCommand> group =
+        [
+            new SbLoop { StartMs = 0, EndMs = 0, Count = 2, Children = [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 500, Start = 0, End = 1 }] },
+        ];
+        var baker = new GroupTransformBaker(group, pivotX: 320, pivotY: 240, fps: 30);
+
+        var (_, _, commands) = baker.Bake(baseCenterX: 320, baseCenterY: 240, baseScale: 1, localStartMs: 500, localEndMs: 1000, storyboardTimeOffsetMs: 0);
+
+        var fades = commands.OfType<SbValueCommand>().Where(c => c.Kind == SbCommandKind.Fade).OrderBy(c => c.StartMs).ToList();
+        Assert.NotEmpty(fades);
+        Assert.Equal(0f, fades[0].Start); // second iteration restarts the fade at 0, per the loop shape
+    }
 }

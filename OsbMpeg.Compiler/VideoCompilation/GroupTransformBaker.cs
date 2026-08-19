@@ -9,8 +9,9 @@ namespace OsbMpeg.VideoCompilation;
 ///
 /// V1 scope: Move (M/MX/MY, absolute — matches CommandEvaluator's own default-to-declared-
 /// position convention), Scale/VectorScale, Rotate, Fade, Colour, Additive, flip (P,H/P,V).
-/// Loop is rejected: CommandEvaluator doesn't walk into loop children for property
-/// evaluation, so baking one would silently play back as if the loop's contents didn't exist.
+/// Loop is expanded to plain absolute-time commands via LoopFlattener before any of the above
+/// runs — CommandEvaluator itself doesn't walk into loop children for property evaluation, so
+/// baking the SbLoop directly would silently play back as if its contents didn't exist.
 ///
 /// Rotation and flip are a per-tile rigid-body decomposition, not just a copied value: a
 /// tile's CENTER has to move along the same arc/mirror the group's whole rotation/flip
@@ -39,10 +40,7 @@ public sealed class GroupTransformBaker
 
     public GroupTransformBaker(List<SbCommand> groupCommands, float pivotX, float pivotY, double fps)
     {
-        if (groupCommands.Any(c => c is SbLoop))
-            throw new NotSupportedException("AnimationVideo commands contain a Loop (\"L\") — group-transform baking doesn't evaluate loop children yet (V1). Flatten it or wait for baking support.");
-
-        _group = groupCommands;
+        _group = LoopFlattener.Flatten(groupCommands);
         _pivotX = pivotX;
         _pivotY = pivotY;
         _frameDurationMs = 1000.0 / fps;
