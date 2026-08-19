@@ -48,7 +48,7 @@ public static class LoopFlattener
         SbValueCommand v => new SbValueCommand { Kind = v.Kind, Easing = v.Easing, StartMs = v.StartMs + shift, EndMs = v.EndMs + shift, Start = v.Start, End = v.End },
         SbColourCommand cc => new SbColourCommand { Easing = cc.Easing, StartMs = cc.StartMs + shift, EndMs = cc.EndMs + shift, Start = cc.Start, End = cc.End },
         SbFlagCommand f => new SbFlagCommand { Kind = f.Kind, Easing = f.Easing, StartMs = f.StartMs + shift, EndMs = f.EndMs + shift },
-        SbTrigger => throw new NotSupportedException("Trigger commands cannot appear inside a flattened Loop — the .osbv parser already rejects Trigger outright."),
+        SbTrigger => throw new NotSupportedException("Trigger commands nested inside a Loop are not supported — a Loop iteration needs a fixed absolute start time to shift children by, but a Trigger fires at an unknown runtime event with no fixed instant."),
         _ => throw new NotSupportedException($"Unknown command type: {c.GetType()}"),
     };
 }
