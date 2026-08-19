@@ -54,11 +54,23 @@ public static class ParameterTuner
     private static readonly int[] HashQuantCandidates = [32, 16, 8];
     private static readonly int[] ToleranceCandidates = [0, 4, 8, 16];
 
+    /// <summary>
+    ///     Sample window is anchored to the whole source file's own duration
+    ///     (<paramref name="info" />.Duration), not to whatever [start,end) window this particular
+    ///     .osbv's VideoSourcePlan happens to request. Two different .osbv projects referencing the
+    ///     same video file with different windows must land on the same sample window here, or
+    ///     they'd legitimately tune different TileSize/etc for genuinely identical overlapping
+    ///     content — which would hash differently and defeat the persistent AssetStore cache across
+    ///     those two compiles even though the underlying pixels never changed. Centering on the
+    ///     video's own middle, independent of any one project's window, is what makes tuning a pure
+    ///     function of (video file, tuning constants) instead of (video file, this compile's window).
+    /// </summary>
     public static async Task<TunedParameters> TuneAsync(string inputPath, MediaInfo info, double fps,
-        double windowStartMs, double windowDurationMs, Action<string>? log, CancellationToken ct)
+        Action<string>? log, CancellationToken ct)
     {
-        var sampleDurationMs = Math.Min(SampleWindowMs, windowDurationMs);
-        var sampleStartMs = windowStartMs + Math.Max(0, (windowDurationMs - sampleDurationMs) / 2);
+        var durationMs = info.Duration.TotalMilliseconds;
+        var sampleDurationMs = Math.Min(SampleWindowMs, durationMs);
+        var sampleStartMs = Math.Max(0, (durationMs - sampleDurationMs) / 2);
 
         return await TuneCoreAsync(
             (tileSize, hashQuantLevels, tileTolerance, colors) =>
@@ -121,18 +133,28 @@ public static class ParameterTuner
     ///     <paramref name="floor" />; if none do, falls back to the highest-PSNR candidate (a later
     ///     axis may still recover the target) and reports <c>MetFloor: false</c> so the caller knows
     ///     this axis's own contribution never actually cleared the bar.
+    ///     Candidates within one axis are independent (each writes to its own throwaway temp dir,
+    ///     no shared mutable state), so they run concurrently via Task.WhenAll rather than one at a
+    ///     time — axes still run sequentially against each other (each one's candidates need the
+    ///     previous axis's chosen value), but this is the one place probes can overlap without
+    ///     changing what the search decides. Task.WhenAll preserves input order in its result array
+    ///     regardless of completion order, so tie-breaking (first-seen-wins on equal cost) is
+    ///     unaffected by running in parallel.
     /// </summary>
     private static async Task<(int Value, bool MetFloor)> BestAsync(int[] candidates,
         Func<int, Task<ProbeResult>> probe, double floor, int current, Action<string>? log, string axisName)
     {
+        var results = await Task.WhenAll(candidates.Select(c => probe(c)));
+
         ProbeResult? bestPassing = null;
         var bestPassingValue = current;
         ProbeResult? bestOverall = null;
         var bestOverallValue = current;
 
-        foreach (var candidate in candidates)
+        for (var i = 0; i < candidates.Length; i++)
         {
-            var result = await probe(candidate);
+            var candidate = candidates[i];
+            var result = results[i];
             log?.Invoke($"  {axisName}={candidate}: PSNR={result.Psnr:F2}dB cost={result.Cost:F0}");
 
             if (bestOverall is null || result.Psnr > bestOverall.Value.Psnr)

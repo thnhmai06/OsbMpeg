@@ -143,8 +143,12 @@ public static class VideoCompiler
         async Task<TunedParameters> TunedFor(VideoSourcePlan plan, MediaInfo info)
         {
             if (tunedByPlan.TryGetValue(plan, out var existing)) return existing;
-            var tuned = await ParameterTuner.TuneAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps,
-                plan.UnionStartMs, plan.UnionEndMs - plan.UnionStartMs, log, ct);
+            // Anchored to the whole source file's own duration, not this plan's [start,end)
+            // window — see ParameterTuner.TuneAsync's doc comment: two .osbv projects referencing
+            // the same video with different windows must tune the same way, or identical
+            // overlapping content would hash differently between them and never share the cache.
+            var tuned = await ParameterTuner.TuneAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, log,
+                ct);
             return tunedByPlan[plan] = tuned;
         }
     }
