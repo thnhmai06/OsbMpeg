@@ -1,13 +1,16 @@
 using System.Globalization;
+using System.Linq;
 using OsbMpeg.Ir;
 
 namespace OsbMpeg.Osb;
 
-/// <summary>Serializes a <see cref="SbDocument"/> to .osb text. Always emits explicit
-/// start/end time and value pairs — the shorthand omission forms (endtime-omitted,
-/// value-omitted) are an optimizer-phase concern (ShorthandCompactor), not a writer concern.
-/// The multi-value sequential shorthand is never emitted at all: lazer silently drops the
-/// extra values, so writing it would produce a document that is valid text but wrong.</summary>
+/// <summary>Serializes a <see cref="SbDocument"/> to .osb text. Applies the two shorthand
+/// omission forms the format actually supports (endtime field left blank when it equals
+/// StartTime; end-value fields dropped entirely when they equal the start values) — both
+/// decisions are self-contained per command line, so they live in the writer rather than as
+/// a separate IR pass. The multi-value sequential shorthand is never emitted at all: lazer
+/// silently drops the extra values, so writing it would produce a document that is valid
+/// text but wrong.</summary>
 public static class OsbWriter
 {
     private static readonly SbLayer[] LayerOrder = [SbLayer.Background, SbLayer.Fail, SbLayer.Pass, SbLayer.Foreground, SbLayer.Overlay];
@@ -101,19 +104,22 @@ public static class OsbWriter
         switch (cmd)
         {
             case VectorPair p:
-                w.WriteLine($"{indent}V,{(int)p.X.Easing},{FormatTime(p.X.StartMs)},{FormatTime(p.X.EndMs)},{FormatFloat(p.X.Start)},{FormatFloat(p.Y.Start)},{FormatFloat(p.X.End)},{FormatFloat(p.Y.End)}");
+                WriteCommandLine(w, indent, "V", p.X.Easing, p.X.StartMs, p.X.EndMs,
+                    [FormatFloat(p.X.Start), FormatFloat(p.Y.Start)], [FormatFloat(p.X.End), FormatFloat(p.Y.End)]);
                 break;
 
             case SbValueCommand v:
-                w.WriteLine($"{indent}{Acronym(v.Kind)},{(int)v.Easing},{FormatTime(v.StartMs)},{FormatTime(v.EndMs)},{FormatFloat(v.Start)},{FormatFloat(v.End)}");
+                WriteCommandLine(w, indent, Acronym(v.Kind), v.Easing, v.StartMs, v.EndMs, [FormatFloat(v.Start)], [FormatFloat(v.End)]);
                 break;
 
             case SbColourCommand c:
-                w.WriteLine($"{indent}C,{(int)c.Easing},{FormatTime(c.StartMs)},{FormatTime(c.EndMs)},{c.Start.R},{c.Start.G},{c.Start.B},{c.End.R},{c.End.G},{c.End.B}");
+                WriteCommandLine(w, indent, "C", c.Easing, c.StartMs, c.EndMs,
+                    [c.Start.R.ToString(CultureInfo.InvariantCulture), c.Start.G.ToString(CultureInfo.InvariantCulture), c.Start.B.ToString(CultureInfo.InvariantCulture)],
+                    [c.End.R.ToString(CultureInfo.InvariantCulture), c.End.G.ToString(CultureInfo.InvariantCulture), c.End.B.ToString(CultureInfo.InvariantCulture)]);
                 break;
 
             case SbFlagCommand f:
-                w.WriteLine($"{indent}P,{(int)f.Easing},{FormatTime(f.StartMs)},{FormatTime(f.EndMs)},{FlagLetter(f.Kind)}");
+                WriteCommandLine(w, indent, "P", f.Easing, f.StartMs, f.EndMs, [FlagLetter(f.Kind).ToString()], [FlagLetter(f.Kind).ToString()]);
                 break;
 
             case SbLoop loop:
@@ -131,6 +137,20 @@ public static class OsbWriter
             default:
                 throw new NotSupportedException($"Unknown command type: {cmd.GetType()}");
         }
+    }
+
+    /// <summary>Writes one command line with both shorthand omissions applied: the endtime
+    /// field is left blank when it equals StartTime, and endValues is dropped entirely when
+    /// it's identical (field-for-field, as formatted text) to startValues.</summary>
+    private static void WriteCommandLine(TextWriter w, string indent, string acronym, SbEasing easing, double startMs, double endMs, string[] startValues, string[] endValues)
+    {
+        var startTime = FormatTime(startMs);
+        var endTime = startTime == FormatTime(endMs) ? "" : FormatTime(endMs);
+        var fields = new List<string> { acronym, ((int)easing).ToString(CultureInfo.InvariantCulture), startTime, endTime };
+        fields.AddRange(startValues);
+        if (!startValues.SequenceEqual(endValues))
+            fields.AddRange(endValues);
+        w.WriteLine($"{indent}{string.Join(",", fields)}");
     }
 
     private static string Acronym(SbCommandKind kind) => kind switch
