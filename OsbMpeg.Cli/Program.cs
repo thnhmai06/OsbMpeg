@@ -21,6 +21,9 @@ app.Configure(config =>
 
     config.AddCommand<InspectCommand>("inspect")
         .WithDescription("Dump storyboard IR summary for a .osb file.");
+
+    config.AddCommand<CompileCommand>("compile")
+        .WithDescription("Compile a .osbv source file into a .osb + assets (dev-verification path; no group-transform support yet).");
 });
 
 return await app.RunAsync(args);
