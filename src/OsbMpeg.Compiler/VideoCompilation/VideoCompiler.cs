@@ -1,5 +1,6 @@
 using OsbMpeg.Encoder;
 using OsbMpeg.Ir;
+using OsbMpeg.Ir.Passes;
 using OsbMpeg.Media;
 using OsbMpeg.Osb;
 using OsbMpeg.Osbv;
@@ -109,6 +110,7 @@ public static class VideoCompiler
             }
         }
 
+        MergeAdjacentCommands.Apply(doc);
         OsbWriter.Write(doc, osbOutputPath);
         OsbValidator.Validate(osbOutputPath, doc);
 
