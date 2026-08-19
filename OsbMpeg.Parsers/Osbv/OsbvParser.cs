@@ -5,10 +5,10 @@ namespace OsbMpeg.Osbv;
 
 /// <summary>Hand-written recursive-descent-over-indentation parser for the .osbv source
 /// format: an .osb superset that adds AnimationVideo as a group-transform object. Command
-/// grammar (F/M/MX/MY/S/V/R/C/P/L) is byte-for-byte the same as .osb — see
-/// osu.ppy.sh/wiki/en/Storyboard/Scripting/Commands — except Trigger ("T"), which V1
-/// rejects outright rather than silently mis-handling firing semantics that don't apply
-/// outside real gameplay.
+/// grammar (F/M/MX/MY/S/V/R/C/P/L/T) is byte-for-byte the same as .osb — see
+/// osu.ppy.sh/wiki/en/Storyboard/Scripting/Commands. Trigger ("T") parses fully (its
+/// gameplay-firing semantics are unaffected by grammar), but GroupTransformBaker restricts
+/// what an AnimationVideo's Trigger children may contain — see that class.
 ///
 /// Indentation is a general stack, not a fixed two-level scheme: depth is the count of
 /// leading space/underscore characters (identical weight, matching .osb), and a line at
@@ -71,6 +71,8 @@ public static class OsbvParser
 
             if (cmd is [SbLoop loop])
                 stack.Add((depth, loop.Children));
+            else if (cmd is [SbTrigger trigger])
+                stack.Add((depth, trigger.Children));
         }
 
         if (!sawHeader)
@@ -138,7 +140,11 @@ public static class OsbvParser
     private static List<SbCommand> ParseCommand(List<string> f, int lineNo)
     {
         if (f[0] == "T")
-            throw new OsbvParseException(lineNo, "Trigger commands (\"T\") are not supported in .osbv V1");
+        {
+            RequireEither(f, 4, 5, lineNo, "T,triggerType,startTime,endTime[,groupNumber]");
+            var group = f.Count > 4 && f[4].Length > 0 ? ParseInt(f[4], lineNo) : 0;
+            return [new SbTrigger { Name = f[1], StartMs = ParseDouble(f[2], lineNo), EndMs = ParseDouble(f[3], lineNo), Group = group, Children = [] }];
+        }
 
         if (f[0] == "L")
         {

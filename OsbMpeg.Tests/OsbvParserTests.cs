@@ -18,6 +18,8 @@ public class OsbvParserTests
            V,0,0,50,1,1,2,2
         Sprite,Foreground,Centre,"overlay.png",300,300
          P,0,0,0,A
+         T,HitSoundClap,0,1000,0
+          F,0,0,500,0,1
         AnimationVideo,Foreground,Centre,"video2.mp4",400,150,1000
 
         """;
@@ -63,19 +65,15 @@ public class OsbvParserTests
     }
 
     [Fact]
-    public void RejectsTriggerWithLineNumber()
+    public void ParsesTriggerWithChildren()
     {
-        var lines = new[]
-        {
-            "OsbV: 1",
-            "Sprite,Background,Centre,\"bg.png\",0,0",
-            " T,HitSoundClap,0,1000,0",
-            "  F,0,0,500,0,1",
-        };
+        var doc = OsbvParser.Parse(Sample.Split('\n').Select(l => l.TrimEnd('\r')));
 
-        var ex = Assert.Throws<OsbvParseException>(() => OsbvParser.Parse(lines));
-        Assert.Equal(3, ex.Line);
-        Assert.Contains("Trigger", ex.Message);
+        var overlay = (OsbvSprite)doc.Objects[2];
+        var trigger = Assert.IsType<Ir.SbTrigger>(overlay.Commands[1]);
+        Assert.Equal("HitSoundClap", trigger.Name);
+        Assert.Equal(0, trigger.Group);
+        Assert.Single(trigger.Children);
     }
 
     [Fact]

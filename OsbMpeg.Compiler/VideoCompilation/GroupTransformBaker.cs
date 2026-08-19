@@ -30,20 +30,49 @@ namespace OsbMpeg.VideoCompilation;
 /// does) — sampled at the same fps the tile analysis already runs at, so this introduces no
 /// error beyond the quantization the codec already accepts everywhere else. No polyline/chord-
 /// error approximation is needed for rotation: that trick exists to compact a rotation into
-/// few commands, and per-frame sampling makes the question moot.</summary>
+/// few commands, and per-frame sampling makes the question moot.
+///
+/// Trigger ("T") gets a narrow exception to the "bake into fixed absolute times" model: its
+/// fire time is a gameplay event (hit sound / pass / fail), unknowable at compile time, so
+/// there's no instant to sample the group's transform at — and .osb has no "relative to
+/// whatever the current value is" command, so a triggered Move/Scale/Rotate/flip genuinely
+/// can't be expressed per-tile (each tile would need the group's baseline transform at the
+/// fire time, which doesn't exist until a real playthrough reaches it). Fade/Colour/Additive
+/// don't have this problem — they're the same value on every tile regardless of position —
+/// so a Trigger whose children are limited to those three gets copied verbatim onto every
+/// tile: since every tile shares the identical triggerType/window/children, they all fire in
+/// sync on the same real event. Anything else inside a Trigger is rejected.</summary>
 public sealed class GroupTransformBaker
 {
     private readonly List<SbCommand> _group;
+    private readonly List<SbTrigger> _triggers;
     private readonly float _pivotX;
     private readonly float _pivotY;
     private readonly double _frameDurationMs;
 
     public GroupTransformBaker(List<SbCommand> groupCommands, float pivotX, float pivotY, double fps)
     {
-        _group = LoopFlattener.Flatten(groupCommands);
+        var flattened = LoopFlattener.Flatten(groupCommands);
+        _triggers = flattened.OfType<SbTrigger>().ToList();
+        foreach (var trigger in _triggers)
+            ValidateTriggerChildren(trigger);
+        _group = flattened.Where(c => c is not SbTrigger).ToList();
+
         _pivotX = pivotX;
         _pivotY = pivotY;
         _frameDurationMs = 1000.0 / fps;
+    }
+
+    private static void ValidateTriggerChildren(SbTrigger trigger)
+    {
+        foreach (var c in trigger.Children)
+        {
+            var allowed = c is SbValueCommand { Kind: SbCommandKind.Fade } or SbColourCommand or SbFlagCommand { Kind: SbCommandKind.Additive };
+            if (!allowed)
+                throw new NotSupportedException(
+                    $"Trigger \"{trigger.Name}\" contains a {c.GetType().Name} — V1 only bakes Fade/Colour/Additive inside a Trigger. " +
+                    "Move/Scale/Rotate/flip would need the group's baseline transform at the trigger's fire time, which isn't known until real gameplay reaches it.");
+        }
     }
 
     /// <summary>baseCenterX/Y is the tile's un-transformed storyboard center (auto-cover
@@ -72,7 +101,7 @@ public sealed class GroupTransformBaker
         var colourConstant = ColourConstant(absStart, absEnd);
         var additiveConstant = FlagConstant(SbCommandKind.Additive, absStart, absEnd);
 
-        var commands = new List<SbCommand>();
+        var commands = new List<SbCommand>(_triggers); // shared instances, never mutated — safe to reuse across every tile
 
         if (positionConstant)
         {

@@ -121,4 +121,38 @@ public class GroupTransformBakerTests
         Assert.NotEmpty(fades);
         Assert.Equal(0f, fades[0].Start); // second iteration restarts the fade at 0, per the loop shape
     }
+
+    [Fact]
+    public void TriggerWithFadeChild_CopiedVerbatimOntoEveryTile()
+    {
+        List<SbCommand> group =
+        [
+            new SbTrigger { Name = "HitSoundClap", StartMs = 0, EndMs = 1000, Group = 0, Children = [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 500, Start = 0, End = 1 }] },
+        ];
+        var baker = new GroupTransformBaker(group, pivotX: 320, pivotY: 240, fps: 30);
+
+        // Baked from two different tiles (different base centers) — the trigger must show up
+        // identically on both, since it's position-independent and not something CommandEvaluator
+        // ever samples (its fire time is unknown at compile time).
+        var (_, _, commandsA) = baker.Bake(baseCenterX: 320, baseCenterY: 240, baseScale: 1, localStartMs: 0, localEndMs: 2000, storyboardTimeOffsetMs: 0);
+        var (_, _, commandsB) = baker.Bake(baseCenterX: 420, baseCenterY: 300, baseScale: 1, localStartMs: 0, localEndMs: 2000, storyboardTimeOffsetMs: 0);
+
+        var triggerA = Assert.Single(commandsA.OfType<SbTrigger>());
+        var triggerB = Assert.Single(commandsB.OfType<SbTrigger>());
+        Assert.Same(triggerA, triggerB); // same shared instance, not a per-tile copy — it's immutable data
+        Assert.Equal("HitSoundClap", triggerA.Name);
+        Assert.Single(triggerA.Children);
+    }
+
+    [Fact]
+    public void RejectsMoveInsideTrigger()
+    {
+        List<SbCommand> group =
+        [
+            new SbTrigger { Name = "Passing", StartMs = 0, EndMs = 1000, Children = [new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = 0, EndMs = 500, Start = 0, End = 100 }] },
+        ];
+
+        var ex = Assert.Throws<NotSupportedException>(() => new GroupTransformBaker(group, 320, 240, 30));
+        Assert.Contains("Passing", ex.Message);
+    }
 }

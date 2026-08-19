@@ -132,6 +132,12 @@ public static class OsbvWriter
                     WriteCommand(w, child, depth + 1);
                 break;
 
+            case SbTrigger trigger:
+                w.WriteLine($"{indent}T,{trigger.Name},{T(trigger.StartMs)},{T(trigger.EndMs)},{trigger.Group}");
+                foreach (var child in Pair(trigger.Children))
+                    WriteCommand(w, child, depth + 1);
+                break;
+
             default:
                 throw new NotSupportedException($"Unknown command type: {cmd.GetType()}");
         }
