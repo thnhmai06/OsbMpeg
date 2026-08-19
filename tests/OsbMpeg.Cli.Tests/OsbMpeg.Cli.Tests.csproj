@@ -10,15 +10,13 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
         <PackageReference Include="xunit.v3" Version="4.0.0" />
         <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\OsbMpeg.Compiler\OsbMpeg.Compiler.csproj" />
-        <ProjectReference Include="..\OsbMpeg.Parsers\OsbMpeg.Parsers.csproj" />
+        <ProjectReference Include="..\..\src\OsbMpeg.Cli\OsbMpeg.Cli.csproj" />
     </ItemGroup>
 
 </Project>
