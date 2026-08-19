@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using OsbMpeg.Analysis;
 using OsbMpeg.Ir;
 using OsbMpeg.Media;
 using OsbMpeg.Osb;
@@ -32,40 +31,16 @@ public sealed class EncodePipeline(EncodeOptions options)
         var assetStore = new AssetStore(options.AssetDir, options.AssetRelativeDir, options.AssetNamePrefix, options.Colors, options.PngCompressionLevel);
         var doc = new SbDocument();
         var mapping = new CanvasMapping(width, height);
-        var grid = new TileGrid(width, height, options.TileSize);
-        var tracker = new TileRunTracker(grid, options.HashQuantLevels, canonicalSnapshot: !options.RawSnapshot, tolerance: options.TileTolerance);
-        var animationDetector = new AnimationDetector(fps, maxAccumulatedFrames: options.Gop, minUniqueness: options.MinAnimationUniqueness);
 
-        var frameOpts = new FrameSourceOptions(width, height, fps, options.Start, options.Duration);
-        var frameCount = 0;
-        var lastMs = 0.0;
+        var loopOptions = new TileEncodeLoop.Options(
+            options.InputPath, width, height, fps, options.Start, options.Duration,
+            options.TileSize, options.HashQuantLevels, options.RawSnapshot, options.TileTolerance, options.Gop,
+            options.MinAnimationUniqueness, options.NoQuadtree, options.MaxAssetPixels);
 
-        await foreach (var frame in FrameSource.ReadFramesAsync(options.InputPath, frameOpts, ct))
-        {
-            using (frame)
-            {
-                lastMs = frame.Pts * 1000.0;
-                frameCount++;
-
-                var batch = tracker.Advance(frame, lastMs);
-                var merged = options.NoQuadtree ? batch : QuadtreeMerger.Merge(batch, grid, options.MaxAssetPixels);
-                var (sprites, animations) = animationDetector.Process(merged, options.TileSize);
-                EmitRuns(sprites, doc, assetStore, mapping);
-                EmitAnimations(animations, doc, assetStore, mapping);
-
-                onProgress?.Invoke(new EncodeProgress(frameCount, estimatedTotalFrames, frame.Pts, doc.SpriteCount, doc.CommandCount, assetStore.FileCount, assetStore.TotalBytes));
-            }
-        }
-
-        var finalBatch = tracker.Flush(lastMs);
-        var finalMerged = options.NoQuadtree ? finalBatch : QuadtreeMerger.Merge(finalBatch, grid, options.MaxAssetPixels);
-        var (finalSprites, finalAnimations) = animationDetector.Process(finalMerged, options.TileSize);
-        EmitRuns(finalSprites, doc, assetStore, mapping);
-        EmitAnimations(finalAnimations, doc, assetStore, mapping);
-
-        var (tailSprites, tailAnimations) = animationDetector.FlushAll();
-        EmitRuns(tailSprites, doc, assetStore, mapping);
-        EmitAnimations(tailAnimations, doc, assetStore, mapping);
+        var result = await TileEncodeLoop.RunAsync(loopOptions, doc, assetStore, mapping,
+            (frame, pts) => onProgress?.Invoke(new EncodeProgress(frame, estimatedTotalFrames, pts, doc.SpriteCount, doc.CommandCount, assetStore.FileCount, assetStore.TotalBytes)),
+            ct);
+        var frameCount = result.FrameCount;
 
         OsbWriter.Write(doc, options.OutputPath);
         OsbValidator.Validate(options.OutputPath, doc);
@@ -94,68 +69,5 @@ public sealed class EncodePipeline(EncodeOptions options)
             SourceFileBytes = new FileInfo(options.InputPath).Length,
             EncodeTime = stopwatch.Elapsed,
         };
-    }
-
-    private static void EmitRuns(List<TileRun> runs, SbDocument doc, AssetStore assetStore, CanvasMapping mapping)
-    {
-        foreach (var run in runs)
-        {
-            var (sbX, sbY) = mapping.PixelToStoryboard(run.PixelX, run.PixelY);
-            var asset = assetStore.GetOrAdd(run.Rgb, run.Width, run.Height, AssetConsumer.Sprite);
-            var scale = (float)mapping.StoryboardScale;
-
-            doc.Add(new SbSprite
-            {
-                Layer = SbLayer.Background,
-                Origin = SbOrigin.TopLeft,
-                X = (float)sbX,
-                Y = (float)sbY,
-                Asset = asset,
-                Commands =
-                [
-                    new SbValueCommand
-                    {
-                        Kind = SbCommandKind.Scale,
-                        StartMs = run.StartMs,
-                        EndMs = run.EndMs,
-                        Start = scale,
-                        End = scale,
-                    },
-                ],
-            });
-        }
-    }
-
-    private static void EmitAnimations(List<AnimationCandidate> candidates, SbDocument doc, AssetStore assetStore, CanvasMapping mapping)
-    {
-        foreach (var c in candidates)
-        {
-            var (sbX, sbY) = mapping.PixelToStoryboard(c.PixelX, c.PixelY);
-            var basePath = assetStore.WriteAnimation(c.Frames, c.Width, c.Height);
-            var scale = (float)mapping.StoryboardScale;
-
-            doc.Add(new SbAnimation
-            {
-                Layer = SbLayer.Background,
-                Origin = SbOrigin.TopLeft,
-                X = (float)sbX,
-                Y = (float)sbY,
-                BasePath = basePath,
-                FrameCount = c.Frames.Count,
-                FrameDelayMs = c.FrameDelayMs,
-                LoopType = SbLoopType.LoopOnce,
-                Commands =
-                [
-                    new SbValueCommand
-                    {
-                        Kind = SbCommandKind.Scale,
-                        StartMs = c.StartMs,
-                        EndMs = c.EndMs,
-                        Start = scale,
-                        End = scale,
-                    },
-                ],
-            });
-        }
     }
 }

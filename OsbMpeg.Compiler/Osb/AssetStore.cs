@@ -44,6 +44,7 @@ public sealed class AssetStore
     private readonly string _namePrefix;
     private readonly int _colors;
     private readonly PngCompressionLevel _compressionLevel;
+    private readonly bool _hexNaming;
     private readonly Dictionary<(AssetConsumer Consumer, string Hash), AssetId> _dedupe = new();
     private int _counter;
     private int _animationCounter;
@@ -52,13 +53,18 @@ public sealed class AssetStore
     public int AnimationFrameCount { get; private set; }
     public long TotalBytes { get; private set; }
 
-    public AssetStore(string absoluteAssetDir, string relativeDirInOsb, string namePrefix, int colors = 0, int pngCompressionLevel = 6)
+    /// <param name="hexNaming">Switches to the .osbv compiler's layout —
+    /// s/&lt;hex&gt;.png and a/&lt;hex&gt;/f&lt;n&gt;.png, both 0-based — instead of the
+    /// legacy sprites/{prefix}{n}.png / animations/a{id}/a{id}{n}.png layout the old
+    /// whole-canvas CLI still writes and validates against.</param>
+    public AssetStore(string absoluteAssetDir, string relativeDirInOsb, string namePrefix, int colors = 0, int pngCompressionLevel = 6, bool hexNaming = false)
     {
         _absoluteDir = absoluteAssetDir;
         _relativeDir = relativeDirInOsb;
         _namePrefix = namePrefix;
         _colors = colors;
         _compressionLevel = (PngCompressionLevel)Math.Clamp(pngCompressionLevel, 0, 9);
+        _hexNaming = hexNaming;
         Directory.CreateDirectory(absoluteAssetDir);
     }
 
@@ -74,7 +80,7 @@ public sealed class AssetStore
         if (_dedupe.TryGetValue(key, out var existing))
             return existing;
 
-        var relativePath = $"sprites/{_namePrefix}{_counter++}.png";
+        var relativePath = _hexNaming ? $"s/{_counter++:x}.png" : $"sprites/{_namePrefix}{_counter++}.png";
         var id = SavePng(relativePath, rgb, width, height);
         _dedupe[key] = id;
         return id;
@@ -88,9 +94,8 @@ public sealed class AssetStore
     /// look up.</summary>
     public AssetId WriteAnimation(IReadOnlyList<byte[]> frames, int width, int height)
     {
-        var id = ++_animationCounter;
-        var relDir = $"animations/a{id}";
-        var baseFileName = $"a{id}.png";
+        var relDir = _hexNaming ? $"a/{_animationCounter++:x}" : $"animations/a{++_animationCounter}";
+        var baseFileName = _hexNaming ? "f.png" : $"a{_animationCounter}.png";
 
         for (var i = 0; i < frames.Count; i++)
             SavePng($"{relDir}/{baseFileName.Replace(".", $"{i}.")}", frames[i], width, height);

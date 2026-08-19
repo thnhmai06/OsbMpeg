@@ -19,17 +19,37 @@ public readonly struct CanvasMapping
     /// lands at the left edge of the centered 640-wide box (negative when widescreen-extended).</summary>
     public double OffsetXStoryboard { get; }
 
+    /// <summary>Same as OffsetXStoryboard but for y. Always 0 for the whole-canvas
+    /// constructor (the canvas top always maps to storyboard y=0); nonzero only for the
+    /// arbitrary-placement constructor below.</summary>
+    public double OffsetYStoryboard { get; }
+
     public CanvasMapping(int canvasWidth, int canvasHeight)
     {
         ScaleToCanvas = canvasHeight / 480.0;
         StoryboardScale = 480.0 / canvasHeight;
         var widescreenStoryboardWidth = canvasWidth / ScaleToCanvas;
         OffsetXStoryboard = (widescreenStoryboardWidth - 640.0) / 2.0;
+        OffsetYStoryboard = 0;
+    }
+
+    /// <summary>Auto-cover placement for a single video object (the .osbv compiler's default,
+    /// no-group-transform case): pixel space (0..pixelWidth, 0..pixelHeight) is scaled
+    /// uniformly by max(640/pixelWidth, 480/pixelHeight) — covering the legacy 640x480 box on
+    /// both axes, cropped by osu!'s own layer masking where it overflows — and centered so the
+    /// video's own center lands at (centerXStoryboard, centerYStoryboard).</summary>
+    public CanvasMapping(int pixelWidth, int pixelHeight, double centerXStoryboard, double centerYStoryboard)
+    {
+        var scale = Math.Max(640.0 / pixelWidth, 480.0 / pixelHeight);
+        StoryboardScale = scale;
+        ScaleToCanvas = 1.0 / scale;
+        OffsetXStoryboard = pixelWidth / 2.0 * scale - centerXStoryboard;
+        OffsetYStoryboard = pixelHeight / 2.0 * scale - centerYStoryboard;
     }
 
     public (double X, double Y) PixelToStoryboard(double pixelX, double pixelY)
-        => (pixelX * StoryboardScale - OffsetXStoryboard, pixelY * StoryboardScale);
+        => (pixelX * StoryboardScale - OffsetXStoryboard, pixelY * StoryboardScale - OffsetYStoryboard);
 
     public (double X, double Y) StoryboardToPixel(double sbX, double sbY)
-        => ((sbX + OffsetXStoryboard) * ScaleToCanvas, sbY * ScaleToCanvas);
+        => ((sbX + OffsetXStoryboard) * ScaleToCanvas, (sbY + OffsetYStoryboard) * ScaleToCanvas);
 }
