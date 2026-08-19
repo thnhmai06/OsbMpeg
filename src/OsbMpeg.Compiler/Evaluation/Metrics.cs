@@ -1,7 +1,9 @@
-namespace OsbMpeg.Coding;
+namespace OsbMpeg.Compiler.Evaluation;
 
-/// <summary>Quality metrics for benchmark reconstruction comparison. Both operate on
-/// equal-length packed Rgb24 buffers.</summary>
+/// <summary>
+///     Quality metrics for benchmark reconstruction comparison. Both operate on
+///     equal-length packed Rgb24 buffers.
+/// </summary>
 public static class Metrics
 {
     public static double Psnr(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
@@ -17,10 +19,12 @@ public static class Metrics
         return mse <= 0 ? 100.0 : 10 * Math.Log10(255.0 * 255.0 / mse);
     }
 
-    /// <summary>ponytail: global (whole-frame) SSIM — one mean/variance/covariance per frame,
-    /// not the standard 11x11 sliding Gaussian window. Cheaper and structurally less sensitive
-    /// to localized artifacts (a single wrong tile in an otherwise perfect frame barely moves
-    /// this number). Swap in a windowed implementation if per-frame SSIM needs to catch that.</summary>
+    /// <summary>
+    ///     ponytail: global (whole-frame) SSIM — one mean/variance/covariance per frame,
+    ///     not the standard 11x11 sliding Gaussian window. Cheaper and structurally less sensitive
+    ///     to localized artifacts (a single wrong tile in an otherwise perfect frame barely moves
+    ///     this number). Swap in a windowed implementation if per-frame SSIM needs to catch that.
+    /// </summary>
     public static double Ssim(byte[] lumaA, byte[] lumaB)
     {
         var n = lumaA.Length;
@@ -30,26 +34,28 @@ public static class Metrics
             meanA += lumaA[i];
             meanB += lumaB[i];
         }
+
         meanA /= n;
         meanB /= n;
 
-        double varA = 0, varB = 0, covAB = 0;
+        double varA = 0, varB = 0, covAb = 0;
         for (var i = 0; i < n; i++)
         {
             var da = lumaA[i] - meanA;
             var db = lumaB[i] - meanB;
             varA += da * da;
             varB += db * db;
-            covAB += da * db;
+            covAb += da * db;
         }
+
         varA /= n;
         varB /= n;
-        covAB /= n;
+        covAb /= n;
 
-        const double c1 = 6.5025; // (0.01*255)^2
-        const double c2 = 58.5225; // (0.03*255)^2
-        return (2 * meanA * meanB + c1) * (2 * covAB + c2)
-            / ((meanA * meanA + meanB * meanB + c1) * (varA + varB + c2));
+        const double c1 = 0.01 * 255 * 0.01 * 255;
+        const double c2 = 0.03 * 255 * 0.03 * 255;
+        return (2 * meanA * meanB + c1) * (2 * covAb + c2)
+               / ((meanA * meanA + meanB * meanB + c1) * (varA + varB + c2));
     }
 
     public static byte[] ToLuma(ReadOnlySpan<byte> rgb)

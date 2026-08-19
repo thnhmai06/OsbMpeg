@@ -1,33 +1,40 @@
-using OsbMpeg.Ir;
-using OsbMpeg.Media;
-using OsbMpeg.Osbv;
-using OsbMpeg.VideoCompilation;
+using OsbMpeg.Compiler.Compilation;
+using OsbMpeg.Compiler.Media;
+using OsbMpeg.Parsers.Ir;
+using OsbMpeg.Parsers.Osbv;
 using Xunit;
 
-namespace OsbMpeg.Tests;
+namespace OsbMpeg.Compiler.Tests;
 
 public class VideoSourcePlannerTests
 {
-    private static OsbvAnimationVideo Video(string path, double startTime, double? fps = null, double? videoStart = null, double? videoEnd = null) => new()
+    private static OsbvAnimationVideo Video(string path, double startTime, double? fps = null,
+        double? videoStart = null, double? videoEnd = null)
     {
-        Layer = SbLayer.Foreground,
-        Origin = SbOrigin.Centre,
-        X = 0,
-        Y = 0,
-        FilePath = path,
-        StartTimeMs = startTime,
-        Fps = fps,
-        VideoStartMs = videoStart,
-        VideoEndMs = videoEnd,
-    };
+        return new OsbvAnimationVideo
+        {
+            Layer = SbLayer.Foreground,
+            Origin = SbOrigin.Centre,
+            X = 0,
+            Y = 0,
+            FilePath = path,
+            StartTimeMs = startTime,
+            Fps = fps,
+            VideoStartMs = videoStart,
+            VideoEndMs = videoEnd
+        };
+    }
 
-    private static Func<string, Task<MediaInfo>> FakeProbe(Dictionary<string, MediaInfo> byPath) =>
-        path => Task.FromResult(byPath[Path.GetFullPath(path)]);
+    private static Func<string, Task<MediaInfo>> FakeProbe(Dictionary<string, MediaInfo> byPath)
+    {
+        return path => Task.FromResult(byPath[Path.GetFullPath(path)]);
+    }
 
     [Fact]
     public async Task SameFileSameEffectiveFps_SharesOnePlan()
     {
-        var info = new Dictionary<string, MediaInfo> { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
+        var info = new Dictionary<string, MediaInfo>
+            { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
         var videos = new[] { Video("a.mp4", 0), Video("a.mp4", 5000) };
 
         var plans = await VideoSourcePlanner.PlanAsync(videos, FakeProbe(info));
@@ -40,13 +47,14 @@ public class VideoSourcePlannerTests
     [Fact]
     public async Task RequestedFpsAboveSource_ClampsToSource_StillShares()
     {
-        var info = new Dictionary<string, MediaInfo> { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
-        var videos = new[] { Video("a.mp4", 0, fps: 60), Video("a.mp4", 5000) }; // 60 requested clamps to source's 30
+        var info = new Dictionary<string, MediaInfo>
+            { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
+        var videos = new[] { Video("a.mp4", 0, 60), Video("a.mp4", 5000) }; // 60 requested clamps to source's 30
 
         var plans = await VideoSourcePlanner.PlanAsync(videos, FakeProbe(info));
 
-        Assert.Single(plans);
-        Assert.Equal(30, plans[0].Key.EffectiveFps);
+        var item = Assert.Single(plans);
+        Assert.Equal(30, item.Key.EffectiveFps);
     }
 
     [Fact]
@@ -55,7 +63,7 @@ public class VideoSourcePlannerTests
         var info = new Dictionary<string, MediaInfo>
         {
             [Path.GetFullPath("b.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264"),
-            [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264"),
+            [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264")
         };
         var videos = new[] { Video("b.mp4", 0), Video("a.mp4", 0) };
 
@@ -71,11 +79,12 @@ public class VideoSourcePlannerTests
     [Fact]
     public async Task UnionRange_CoversAllMembers_DefaultingToFullDuration()
     {
-        var info = new Dictionary<string, MediaInfo> { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
+        var info = new Dictionary<string, MediaInfo>
+            { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
         var videos = new[]
         {
             Video("a.mp4", 0, videoStart: 2000, videoEnd: 4000),
-            Video("a.mp4", 5000), // no explicit range -> defaults to [0, full duration]
+            Video("a.mp4", 5000) // no explicit range -> defaults to [0, full duration]
         };
 
         var plans = await VideoSourcePlanner.PlanAsync(videos, FakeProbe(info));

@@ -1,4 +1,4 @@
-using OsbMpeg.Cli;
+using OsbMpeg.Cli.Commands;
 using Spectre.Console.Cli;
 
 // Default invocation: osbmpeg <input.osbv> <output.osb> <assets-dir> [--hwaccel MODE].

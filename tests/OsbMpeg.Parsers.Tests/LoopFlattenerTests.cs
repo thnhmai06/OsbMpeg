@@ -1,17 +1,18 @@
-using OsbMpeg.Ir;
+using OsbMpeg.Parsers.Ir;
 using Xunit;
 
-namespace OsbMpeg.Tests;
+namespace OsbMpeg.Parsers.Tests;
 
 public class LoopFlattenerTests
 {
     [Fact]
     public void PassesNonLoopCommandsThrough()
     {
-        List<SbCommand> commands = [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 100, Start = 0, End = 1 }];
+        List<SbCommand> commands =
+            [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 100, Start = 0, End = 1 }];
         var flat = LoopFlattener.Flatten(commands);
-        Assert.Single(flat);
-        Assert.Same(commands[0], flat[0]);
+        var item = Assert.Single(flat);
+        Assert.Same(commands[0], item);
     }
 
     [Fact]
@@ -26,8 +27,11 @@ public class LoopFlattenerTests
                 StartMs = 60000,
                 EndMs = 60000,
                 Count = 3,
-                Children = [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 500, Start = 0, End = 1 }],
-            },
+                Children =
+                [
+                    new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 500, Start = 0, End = 1 }
+                ]
+            }
         ];
 
         var flat = LoopFlattener.Flatten(commands);
@@ -43,7 +47,14 @@ public class LoopFlattenerTests
     {
         List<SbCommand> commands =
         [
-            new SbLoop { StartMs = 1000, EndMs = 1000, Count = 0, Children = [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 100, Start = 0, End = 1 }] },
+            new SbLoop
+            {
+                StartMs = 1000, EndMs = 1000, Count = 0,
+                Children =
+                [
+                    new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 100, Start = 0, End = 1 }
+                ]
+            }
         ];
 
         Assert.Single(LoopFlattener.Flatten(commands));
@@ -60,11 +71,11 @@ public class LoopFlattenerTests
             StartMs = 0,
             EndMs = 0,
             Count = 2,
-            Children = [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 200, Start = 0, End = 1 }],
+            Children = [new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 200, Start = 0, End = 1 }]
         };
         List<SbCommand> commands =
         [
-            new SbLoop { StartMs = 5000, EndMs = 5000, Count = 2, Children = [inner] },
+            new SbLoop { StartMs = 5000, EndMs = 5000, Count = 2, Children = [inner] }
         ];
 
         var flat = LoopFlattener.Flatten(commands);

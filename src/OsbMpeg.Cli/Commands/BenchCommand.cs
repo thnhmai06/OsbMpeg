@@ -1,19 +1,25 @@
 using System.Diagnostics;
+using System.Text.Json;
 using FFMpegCore;
-using OsbMpeg.Coding;
-using OsbMpeg.Encoder;
-using OsbMpeg.Media;
-using OsbMpeg.Osb;
-using OsbMpeg.Render;
-using OsbMpeg.Ui;
+using FFMpegCore.Pipes;
+using OsbMpeg.Cli.Formats;
+using OsbMpeg.Cli.Settings;
+using OsbMpeg.Compiler.Encoder;
+using OsbMpeg.Compiler.Evaluation;
+using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Render;
+using OsbMpeg.Parsers.Osb;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
-namespace OsbMpeg.Cli;
+namespace OsbMpeg.Cli.Commands;
 
 public sealed class BenchCommand : AsyncCommand<BenchSettings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, BenchSettings settings, CancellationToken cancellationToken)
+    private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, BenchSettings settings,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(settings.Input))
         {
@@ -34,20 +40,19 @@ public sealed class BenchCommand : AsyncCommand<BenchSettings>
         var reconPath = Path.Combine(workDir, "recon.mp4");
 
         var options = new EncodeOptions(
-            InputPath: Path.GetFullPath(settings.Input),
-            OutputPath: osbPath,
-            AssetDir: Path.Combine(workDir, "sb"),
-            AssetRelativeDir: "sb",
-            AssetNamePrefix: "sb",
-            CanvasWidth: width,
-            CanvasHeight: height,
-            Fps: settings.Fps,
-            KeepSource: settings.KeepSource,
-            TileSize: settings.TileSize,
-            HashQuantLevels: settings.HashQuantLevels,
-            Colors: settings.Colors,
-            PngCompressionLevel: 6,
-            FFmpegPath: settings.FFmpegPath,
+            Path.GetFullPath(settings.Input),
+            osbPath,
+            Path.Combine(workDir, "sb"),
+            "sb",
+            "sb",
+            width,
+            height,
+            settings.Fps,
+            settings.KeepSource,
+            settings.TileSize,
+            settings.HashQuantLevels,
+            settings.Colors,
+            6,
             RawSnapshot: settings.RawSnapshot,
             MinAnimationUniqueness: settings.MinAnimationUniqueness,
             TileTolerance: settings.TileTolerance,
@@ -55,7 +60,8 @@ public sealed class BenchCommand : AsyncCommand<BenchSettings>
             Start: EncodeOptions.ParseFFmpegTime(settings.Start),
             Duration: EncodeOptions.ParseFFmpegTime(settings.Duration));
 
-        var encodeStats = await EncodeLiveView.RunAsync(new EncodePipeline(options), !settings.NoProgress);
+        var encodeStats =
+            await EncodeLiveView.RunAsync(new EncodePipeline(options), !settings.NoProgress, cancellationToken);
         ReportTables.PrintEncodeSummary(encodeStats);
 
         var doc = OsbReader.Read(osbPath);
@@ -64,28 +70,21 @@ public sealed class BenchCommand : AsyncCommand<BenchSettings>
 
         var decodeSw = Stopwatch.StartNew();
 
-        IEnumerable<FFMpegCore.Pipes.IVideoFrame> Frames()
-        {
-            for (var i = 0; i < reconFrameCount; i++)
-            {
-                var t = i * 1000.0 / encodeStats.Fps;
-                yield return new CanvasVideoFrame(renderer.RenderFrame(t));
-            }
-        }
-
         if (settings.NoProgress)
-            await FrameWriter.WriteAsync(Frames(), reconPath, encodeStats.Fps);
+            await FrameWriter.WriteAsync(Frames(), reconPath, encodeStats.Fps, cancellationToken);
         else
             await AnsiConsole.Status().StartAsync($"Reconstructing {reconFrameCount} frames...", async _ =>
-                await FrameWriter.WriteAsync(Frames(), reconPath, encodeStats.Fps));
+                await FrameWriter.WriteAsync(Frames(), reconPath, encodeStats.Fps, cancellationToken));
 
         decodeSw.Stop();
 
-        var (psnr, ssim, compared) = await ComparePsnrSsimAsync(options.InputPath, reconPath, encodeStats.Width, encodeStats.Height, encodeStats.Fps, options.Start, options.Duration);
+        var (psnr, ssim, compared) = await ComparePsnrSsimAsync(options.InputPath, reconPath, encodeStats.Width,
+            encodeStats.Height, encodeStats.Fps, options.Start, options.Duration);
         ReportTables.PrintQualityTable(psnr, ssim, decodeSw.Elapsed);
 
         var peakWorkingSetBytes = Process.GetCurrentProcess().PeakWorkingSet64;
-        AnsiConsole.MarkupLineInterpolated($"Peak working set: [bold]{EncodeLiveView.FormatBytes(peakWorkingSetBytes)}[/]");
+        AnsiConsole.MarkupLineInterpolated(
+            $"Peak working set: [bold]{EncodeLiveView.FormatBytes(peakWorkingSetBytes)}[/]");
 
         if (settings.StatsJson is not null)
         {
@@ -94,20 +93,32 @@ public sealed class BenchCommand : AsyncCommand<BenchSettings>
                 Encode = encodeStats,
                 Quality = new { Psnr = psnr, Ssim = ssim, FramesCompared = compared },
                 DecodeTime = decodeSw.Elapsed,
-                PeakWorkingSetBytes = peakWorkingSetBytes,
+                PeakWorkingSetBytes = peakWorkingSetBytes
             };
-            await File.WriteAllTextAsync(settings.StatsJson, System.Text.Json.JsonSerializer.Serialize(combined, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            await File.WriteAllTextAsync(
+                settings.StatsJson, JsonSerializer.Serialize(combined, SerializerOptions), cancellationToken);
         }
 
-        if (!settings.KeepArtifacts && settings.OutDir is null)
-            Directory.Delete(workDir, recursive: true);
+        if (settings is { KeepArtifacts: false, OutDir: null })
+            Directory.Delete(workDir, true);
 
         return 0;
+
+        IEnumerable<IVideoFrame> Frames()
+        {
+            for (var i = 0; i < reconFrameCount; i++)
+            {
+                var t = i * 1000.0 / encodeStats.Fps;
+                yield return new CanvasVideoFrame(renderer.RenderFrame(t));
+            }
+        }
     }
 
-    private static async Task<(double Psnr, double Ssim, int Compared)> ComparePsnrSsimAsync(string originalPath, string reconPath, int width, int height, double fps, TimeSpan? start, TimeSpan? duration)
+    private static async Task<(double Psnr, double Ssim, int Compared)> ComparePsnrSsimAsync(string originalPath,
+        string reconPath, int width, int height, double fps, TimeSpan? start, TimeSpan? duration)
     {
-        var origFrames = FrameSource.ReadFramesAsync(originalPath, new FrameSourceOptions(width, height, fps, start, duration));
+        var origFrames =
+            FrameSource.ReadFramesAsync(originalPath, new FrameSourceOptions(width, height, fps, start, duration));
         var reconFrames = FrameSource.ReadFramesAsync(reconPath, new FrameSourceOptions(width, height, fps));
 
         double psnrSum = 0, ssimSum = 0;

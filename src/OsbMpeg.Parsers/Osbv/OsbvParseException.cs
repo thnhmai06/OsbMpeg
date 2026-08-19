@@ -1,4 +1,4 @@
-namespace OsbMpeg.Osbv;
+namespace OsbMpeg.Parsers.Osbv;
 
 public sealed class OsbvParseException(int line, string message) : Exception($"line {line}: {message}")
 {

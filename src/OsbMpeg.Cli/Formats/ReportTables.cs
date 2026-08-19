@@ -1,7 +1,7 @@
-using OsbMpeg.Encoder;
+using OsbMpeg.Compiler.Encoder;
 using Spectre.Console;
 
-namespace OsbMpeg.Ui;
+namespace OsbMpeg.Cli.Formats;
 
 public static class ReportTables
 {

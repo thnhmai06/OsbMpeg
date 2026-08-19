@@ -1,28 +1,27 @@
-using OsbMpeg.Ir;
+using OsbMpeg.Parsers.Ir;
+using OsbMpeg.Parsers.Render;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
-namespace OsbMpeg.Render;
+namespace OsbMpeg.Compiler.Render;
 
-/// <summary>Renders a Storyboard IR document to RGB frames in-process, following the
-/// semantics verified against ppy/osu (LegacyStoryboardDecoder / DrawableStoryboard*):
-/// lifetime = [earliest command start, latest command end], values clamp to the nearest
-/// command's edge outside their span, additive/normal blend per BlendingParameters, alpha
-/// wraps modulo 1 above 1 (the flicker exploit lazer deliberately reproduces from stable).
-///
-/// Loop/Trigger children are honored for lifetime bounds but not for property evaluation —
-/// the MVP tile-codec encoder never emits them, and OsbWriter still serializes them correctly
-/// for real osu! to play back. ponytail: extend EvaluateScalar to walk into the active loop
-/// iteration's children if/when an optimizer phase starts emitting SbLoop for real.</summary>
+/// <summary>
+///     Renders a Storyboard IR document to RGB frames in-process, following the
+///     semantics verified against ppy/osu (LegacyStoryboardDecoder / DrawableStoryboard*):
+///     lifetime = [earliest command start, latest command end], values clamp to the nearest
+///     command's edge outside their span, additive/normal blend per BlendingParameters, alpha
+///     wraps modulo 1 above 1 (the flicker exploit lazer deliberately reproduces from stable).
+///     Loop/Trigger children are honored for lifetime bounds but not for property evaluation —
+///     the MVP tile-codec encoder never emits them, and OsbWriter still serializes them correctly
+///     for real osu! to play back. ponytail: extend EvaluateScalar to walk into the active loop
+///     iteration's children if/when an optimizer phase starts emitting SbLoop for real.
+/// </summary>
 public sealed class SoftwareStoryboardRenderer
 {
+    private readonly Dictionary<AssetId, SpriteFrame> _assetCache = new();
     private readonly string _assetRootDir;
     private readonly CanvasMapping _mapping;
     private readonly List<(SbObject Obj, double Start, double End)> _renderList;
-    private readonly Dictionary<AssetId, SpriteFrame> _assetCache = new();
-
-    public int Width { get; }
-    public int Height { get; }
 
     public SoftwareStoryboardRenderer(SbDocument doc, string assetRootDir, int width, int height)
     {
@@ -32,19 +31,21 @@ public sealed class SoftwareStoryboardRenderer
         _mapping = new CanvasMapping(width, height);
 
         _renderList = [];
-        foreach (var layer in new[] { SbLayer.Background, SbLayer.Fail, SbLayer.Pass, SbLayer.Foreground, SbLayer.Overlay })
+        foreach (var layer in new[]
+                     { SbLayer.Background, SbLayer.Fail, SbLayer.Pass, SbLayer.Foreground, SbLayer.Overlay })
         {
             if (!doc.Layers.TryGetValue(layer, out var objects))
                 continue;
-            foreach (var obj in objects)
+            foreach (var obj in objects.Where(obj => obj.HasCommands))
             {
-                if (!obj.HasCommands)
-                    continue; // never instantiated by the real renderer either
                 var (start, end) = CommandEvaluator.Lifetime(obj.Commands);
                 _renderList.Add((obj, start, end));
             }
         }
     }
+
+    public int Width { get; }
+    public int Height { get; }
 
     /// <summary>Latest lifetime end across every object — the moment nothing is left to draw.</summary>
     public double DurationMs => _renderList.Count == 0 ? 0 : _renderList.Max(r => r.End);
@@ -87,21 +88,25 @@ public sealed class SoftwareStoryboardRenderer
         var scaleY = scaleUniform * vectorScaleY * (flipV ? -1 : 1) * _mapping.ScaleToCanvas;
         var (originX, originY) = OriginFraction(obj.Origin);
 
-        Compositor.Blit(canvas, frame, px, py, originX, originY, scaleX, scaleY, rotation, alpha, colR, colG, colB, additive);
+        Compositor.Blit(canvas, frame, px, py, originX, originY, scaleX, scaleY, rotation, alpha, colR, colG, colB,
+            additive);
     }
 
-    private SpriteFrame GetAsset(SbObject obj, double t, double earliestStart) => obj switch
+    private SpriteFrame GetAsset(SbObject obj, double t, double earliestStart)
     {
-        SbSprite s => LoadAsset(s.Asset),
-        SbAnimation a => LoadAsset(PickAnimationFrame(a, t, earliestStart)),
-        _ => default,
-    };
+        return obj switch
+        {
+            SbSprite s => LoadAsset(s.Asset),
+            SbAnimation a => LoadAsset(PickAnimationFrame(a, t, earliestStart)),
+            _ => default
+        };
+    }
 
     private static AssetId PickAnimationFrame(SbAnimation a, double t, double earliestStart)
     {
         var index = (int)((t - earliestStart) / a.FrameDelayMs);
         index = a.LoopType == SbLoopType.LoopForever
-            ? ((index % a.FrameCount) + a.FrameCount) % a.FrameCount
+            ? (index % a.FrameCount + a.FrameCount) % a.FrameCount
             : Math.Clamp(index, 0, a.FrameCount - 1);
         return a.FramePath(index);
     }
@@ -120,19 +125,21 @@ public sealed class SoftwareStoryboardRenderer
         return frame;
     }
 
-    private static (double X, double Y) OriginFraction(SbOrigin origin) => origin switch
+    private static (double X, double Y) OriginFraction(SbOrigin origin)
     {
-        SbOrigin.TopLeft => (0, 0),
-        SbOrigin.Centre => (0.5, 0.5),
-        SbOrigin.CentreLeft => (0, 0.5),
-        SbOrigin.TopRight => (1, 0),
-        SbOrigin.BottomCentre => (0.5, 1),
-        SbOrigin.TopCentre => (0.5, 0),
-        SbOrigin.Custom => (0, 0), // falls through to TopLeft in lazer's parseOrigin switch
-        SbOrigin.CentreRight => (1, 0.5),
-        SbOrigin.BottomLeft => (0, 1),
-        SbOrigin.BottomRight => (1, 1),
-        _ => (0, 0),
-    };
-
+        return origin switch
+        {
+            SbOrigin.TopLeft => (0, 0),
+            SbOrigin.Centre => (0.5, 0.5),
+            SbOrigin.CentreLeft => (0, 0.5),
+            SbOrigin.TopRight => (1, 0),
+            SbOrigin.BottomCentre => (0.5, 1),
+            SbOrigin.TopCentre => (0.5, 0),
+            SbOrigin.Custom => (0, 0), // falls through to TopLeft in lazer's parseOrigin switch
+            SbOrigin.CentreRight => (1, 0.5),
+            SbOrigin.BottomLeft => (0, 1),
+            SbOrigin.BottomRight => (1, 1),
+            _ => (0, 0)
+        };
+    }
 }

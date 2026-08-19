@@ -1,13 +1,15 @@
-using OsbMpeg.Ir;
+using OsbMpeg.Parsers.Ir;
 
-namespace OsbMpeg.Osbv;
+namespace OsbMpeg.Parsers.Osbv;
 
-/// <summary>.osbv source-level object. Shares the exact command grammar (SbCommand and its
-/// subtypes) with the .osb target IR — commands mean the same thing regardless of which
-/// object they're attached to. AnimationVideo is the one object kind with no .osb
-/// equivalent: it's a group whose commands the compiler bakes into every generated tile
-/// sprite (see the compiler's transform evaluator/baker), not something a renderer plays
-/// back directly.</summary>
+/// <summary>
+///     .osbv source-level object. Shares the exact command grammar (SbCommand and its
+///     subtypes) with the .osb target IR — commands mean the same thing regardless of which
+///     object they're attached to. AnimationVideo is the one object kind with no .osb
+///     equivalent: it's a group whose commands the compiler bakes into every generated tile
+///     sprite (see the compiler's transform evaluator/baker), not something a renderer plays
+///     back directly.
+/// </summary>
 public abstract class OsbvObject
 {
     public required SbLayer Layer { get; init; }
@@ -30,8 +32,10 @@ public sealed class OsbvAnimation : OsbvObject
     public required SbLoopType LoopType { get; init; }
 }
 
-/// <summary>Fps/VideoStartMs/VideoEndMs default to source video fps / full duration when
-/// omitted — the compiler resolves that against the probed source, not the parser.</summary>
+/// <summary>
+///     Fps/VideoStartMs/VideoEndMs default to source video fps / full duration when
+///     omitted — the compiler resolves that against the probed source, not the parser.
+/// </summary>
 public sealed class OsbvAnimationVideo : OsbvObject
 {
     public required string FilePath { get; init; }
@@ -43,9 +47,11 @@ public sealed class OsbvAnimationVideo : OsbvObject
 
 public sealed class OsbvDocument
 {
-    /// <summary>Declaration order == z-order within a layer (matches .osb: no depth sort,
-    /// later declarations draw on top). Objects across all layers keep one flat list so an
-    /// AnimationVideo expanded into many tile sprites can be spliced back in at the same
-    /// declaration position relative to native Sprite/Animation neighbors in the same layer.</summary>
+    /// <summary>
+    ///     Declaration order == z-order within a layer (matches .osb: no depth sort,
+    ///     later declarations draw on top). Objects across all layers keep one flat list so an
+    ///     AnimationVideo expanded into many tile sprites can be spliced back in at the same
+    ///     declaration position relative to native Sprite/Animation neighbors in the same layer.
+    /// </summary>
     public List<OsbvObject> Objects { get; } = [];
 }

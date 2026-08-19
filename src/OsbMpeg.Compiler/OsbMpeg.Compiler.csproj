@@ -7,12 +7,12 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="FFMpegCore" Version="5.4.0" />
-      <PackageReference Include="SixLabors.ImageSharp" Version="2.1.13" />
+        <PackageReference Include="FFMpegCore" Version="5.4.0"/>
+        <PackageReference Include="SixLabors.ImageSharp" Version="2.1.13"/>
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\OsbMpeg.Parsers\OsbMpeg.Parsers.csproj" />
+        <ProjectReference Include="..\OsbMpeg.Parsers\OsbMpeg.Parsers.csproj"/>
     </ItemGroup>
 
 </Project>

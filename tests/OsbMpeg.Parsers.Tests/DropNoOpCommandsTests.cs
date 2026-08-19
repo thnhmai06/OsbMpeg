@@ -1,13 +1,16 @@
-using OsbMpeg.Ir;
-using OsbMpeg.Ir.Passes;
+using OsbMpeg.Parsers.Ir;
+using OsbMpeg.Parsers.Ir.Passes;
 using Xunit;
 
-namespace OsbMpeg.Tests;
+namespace OsbMpeg.Parsers.Tests;
 
 public class DropNoOpCommandsTests
 {
-    private static SbValueCommand Fade(double start, double end, float startVal, float endVal) =>
-        new() { Kind = SbCommandKind.Fade, StartMs = start, EndMs = end, Start = startVal, End = endVal };
+    private static SbValueCommand Fade(double start, double end, float startVal, float endVal)
+    {
+        return new SbValueCommand
+            { Kind = SbCommandKind.Fade, StartMs = start, EndMs = end, Start = startVal, End = endVal };
+    }
 
     [Fact]
     public void FlatCommandNestedInWiderFlatCommand_IsDropped()
@@ -67,7 +70,7 @@ public class DropNoOpCommandsTests
         var commands = new List<SbCommand>
         {
             Fade(0, 3000, 1, 1),
-            new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = 1000, EndMs = 2000, Start = 1, End = 1 },
+            new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = 1000, EndMs = 2000, Start = 1, End = 1 }
         };
 
         var dropped = DropNoOpCommands.Drop(commands);
@@ -110,7 +113,7 @@ public class DropNoOpCommandsTests
             X = 0,
             Y = 0,
             Asset = new AssetId("a.png"),
-            Commands = [Fade(0, 3000, 1, 1), Fade(1000, 2000, 1, 1)],
+            Commands = [Fade(0, 3000, 1, 1), Fade(1000, 2000, 1, 1)]
         };
         doc.Add(sprite);
 

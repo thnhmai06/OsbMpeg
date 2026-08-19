@@ -1,11 +1,12 @@
-using OsbMpeg.Encoder;
+using OsbMpeg.Compiler.Encoder;
 using Spectre.Console;
 
-namespace OsbMpeg.Ui;
+namespace OsbMpeg.Cli.Formats;
 
 public static class EncodeLiveView
 {
-    public static async Task<EncodeStatistics> RunAsync(EncodePipeline pipeline, bool showProgress, CancellationToken ct = default)
+    public static async Task<EncodeStatistics> RunAsync(EncodePipeline pipeline, bool showProgress,
+        CancellationToken ct = default)
     {
         if (!showProgress)
             return await pipeline.RunAsync(null, ct);
@@ -13,7 +14,8 @@ public static class EncodeLiveView
         EncodeStatistics? result = null;
 
         await AnsiConsole.Progress()
-            .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn(), new ElapsedTimeColumn())
+            .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn(),
+                new ElapsedTimeColumn())
             .StartAsync(async ctx =>
             {
                 var task = ctx.AddTask("Encoding");
@@ -21,7 +23,8 @@ public static class EncodeLiveView
                 {
                     task.MaxValue = Math.Max(p.EstimatedTotalFrames, p.FrameIndex);
                     task.Value = p.FrameIndex;
-                    task.Description = $"Encoding — frame {p.FrameIndex}/{p.EstimatedTotalFrames} · sprites {p.SpriteCount} · commands {p.CommandCount} · assets {p.AssetCount} ({FormatBytes(p.AssetBytes)})";
+                    task.Description =
+                        $"Encoding — frame {p.FrameIndex}/{p.EstimatedTotalFrames} · sprites {p.SpriteCount} · commands {p.CommandCount} · assets {p.AssetCount} ({FormatBytes(p.AssetBytes)})";
                 }, ct);
                 task.Value = task.MaxValue;
             });
@@ -39,6 +42,7 @@ public static class EncodeLiveView
             v /= 1024;
             i++;
         }
+
         return $"{v:0.##} {units[i]}";
     }
 }

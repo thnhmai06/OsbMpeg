@@ -1,13 +1,15 @@
-using OsbMpeg.Osbv;
-using OsbMpeg.VideoCompilation;
+using OsbMpeg.Cli.Settings;
+using OsbMpeg.Compiler.Compilation;
+using OsbMpeg.Parsers.Osbv;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
-namespace OsbMpeg.Cli;
+namespace OsbMpeg.Cli.Commands;
 
 public sealed class CompileCommand : AsyncCommand<CompileSettings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, CompileSettings settings, CancellationToken cancellationToken)
+    protected override async Task<int> ExecuteAsync(CommandContext context, CompileSettings settings,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(settings.Input))
         {
@@ -26,10 +28,12 @@ public sealed class CompileCommand : AsyncCommand<CompileSettings>
             return 1;
         }
 
-        var result = await VideoCompiler.CompileAsync(document, settings.AssetDir, settings.Output, settings.HwAccel, cancellationToken);
+        var result = await VideoCompiler.CompileAsync(document, settings.AssetDir, settings.Output, settings.HwAccel,
+            cancellationToken);
 
         AnsiConsole.MarkupLineInterpolated($"[green]compiled[/] {settings.Output}");
-        AnsiConsole.MarkupLineInterpolated($"  sprites={result.SpriteCount} animations={result.AnimationCount} commands={result.CommandCount} assets={result.AssetCount} video-sources={result.VideoSourceCount}");
+        AnsiConsole.MarkupLineInterpolated(
+            $"  sprites={result.SpriteCount} animations={result.AnimationCount} commands={result.CommandCount} assets={result.AssetCount} video-sources={result.VideoSourceCount}");
 
         return 0;
     }

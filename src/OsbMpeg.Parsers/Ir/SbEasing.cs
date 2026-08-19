@@ -1,11 +1,11 @@
-namespace OsbMpeg.Ir;
+namespace OsbMpeg.Parsers.Ir;
 
 /// <summary>
-/// osu! storyboard easing ids. Order and names verified against osu-framework's
-/// Easing enum (0..34); id 35 (OutPow10) exists in lazer but has no storyboard-spec
-/// meaning and is deliberately not exposed here.
+///     osu! storyboard easing ids. Order and names verified against osu-framework's
+///     Easing enum (0..34); id 35 (OutPow10) exists in lazer but has no storyboard-spec
+///     meaning and is deliberately not exposed here.
 /// </summary>
-public enum SbEasing
+public enum SbEasing : byte
 {
     None = 0,
     Out = 1,
@@ -41,5 +41,5 @@ public enum SbEasing
     InOutBack = 31,
     InBounce = 32,
     OutBounce = 33,
-    InOutBounce = 34,
+    InOutBounce = 34
 }

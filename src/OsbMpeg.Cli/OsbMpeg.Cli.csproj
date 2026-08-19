@@ -9,12 +9,12 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="Spectre.Console" Version="0.57.2" />
-      <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+        <PackageReference Include="Spectre.Console" Version="0.57.2"/>
+        <PackageReference Include="Spectre.Console.Cli" Version="0.55.0"/>
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\OsbMpeg.Compiler\OsbMpeg.Compiler.csproj" />
+        <ProjectReference Include="..\OsbMpeg.Compiler\OsbMpeg.Compiler.csproj"/>
     </ItemGroup>
 
 </Project>

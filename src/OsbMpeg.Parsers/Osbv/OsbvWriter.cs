@@ -1,20 +1,23 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using OsbMpeg.Ir;
+using OsbMpeg.Parsers.Ir;
 
-namespace OsbMpeg.Osbv;
+namespace OsbMpeg.Parsers.Osbv;
 
-/// <summary>Serializes an <see cref="OsbvDocument"/> back to .osbv text. Exists to give the
-/// parser a round-trip self-check (parse → write → parse again → structurally equal) — it
-/// is not part of the compiler pipeline, which consumes the AST directly. Unlike OsbWriter
-/// (which always emits MX/MY and VX/VY separately, matching how the compiler's own analysis
-/// produces them), this pairs MoveX+MoveY back into "M" and VectorScaleX+VectorScaleY back
-/// into "V" whenever they share timing/easing, so text a human wrote as one M/V line reads
-/// back the same way instead of split in two.</summary>
+/// <summary>
+///     Serializes an <see cref="OsbvDocument" /> back to .osbv text. Exists to give the
+///     parser a round-trip self-check (parse → write → parse again → structurally equal) — it
+///     is not part of the compiler pipeline, which consumes the AST directly. Unlike OsbWriter
+///     (which always emits MX/MY and VX/VY separately, matching how the compiler's own analysis
+///     produces them), this pairs MoveX+MoveY back into "M" and VectorScaleX+VectorScaleY back
+///     into "V" whenever they share timing/easing, so text a human wrote as one M/V line reads
+///     back the same way instead of split in two.
+/// </summary>
 public static class OsbvWriter
 {
     public static void Write(OsbvDocument doc, string path)
     {
-        using var w = new StreamWriter(path, append: false);
+        using var w = new StreamWriter(path, false);
         Write(doc, w);
     }
 
@@ -32,7 +35,7 @@ public static class OsbvWriter
         {
             WriteHeader(w, obj);
             foreach (var cmd in Pair(obj.Commands))
-                WriteCommand(w, cmd, depth: 1);
+                WriteCommand(w, cmd, 1);
         }
     }
 
@@ -44,11 +47,16 @@ public static class OsbvWriter
                 w.WriteLine($"Sprite,{obj.Layer},{obj.Origin},\"{s.FilePath}\",{F(obj.X)},{F(obj.Y)}");
                 break;
             case OsbvAnimation a:
-                w.WriteLine($"Animation,{obj.Layer},{obj.Origin},\"{a.FilePath}\",{F(obj.X)},{F(obj.Y)},{a.FrameCount},{F(a.FrameDelayMs)},{a.LoopType}");
+                w.WriteLine(
+                    $"Animation,{obj.Layer},{obj.Origin},\"{a.FilePath}\",{F(obj.X)},{F(obj.Y)},{a.FrameCount},{F(a.FrameDelayMs)},{a.LoopType}");
                 break;
             case OsbvAnimationVideo v:
             {
-                var fields = new List<string> { "AnimationVideo", obj.Layer.ToString(), obj.Origin.ToString(), $"\"{v.FilePath}\"", F(obj.X), F(obj.Y), F(v.StartTimeMs) };
+                var fields = new List<string>
+                {
+                    "AnimationVideo", obj.Layer.ToString(), obj.Origin.ToString(), $"\"{v.FilePath}\"", F(obj.X),
+                    F(obj.Y), F(v.StartTimeMs)
+                };
                 if (v.Fps is { } fps) fields.Add(F(fps));
                 if (v.VideoStartMs is { } vs) fields.Add(F(vs));
                 if (v.VideoEndMs is { } ve) fields.Add(F(ve));
@@ -58,9 +66,11 @@ public static class OsbvWriter
         }
     }
 
-    /// <summary>Re-pairs MoveX+MoveY (and VectorScaleX+VectorScaleY) that share
-    /// StartMs/EndMs/Easing back into one M/V command, mirroring OsbvParser's expansion in
-    /// reverse. Anything left unpaired stays as its own MX/MY/S/etc. line.</summary>
+    /// <summary>
+    ///     Re-pairs MoveX+MoveY (and VectorScaleX+VectorScaleY) that share
+    ///     StartMs/EndMs/Easing back into one M/V command, mirroring OsbvParser's expansion in
+    ///     reverse. Anything left unpaired stays as its own MX/MY/S/etc. line.
+    /// </summary>
     private static IEnumerable<SbCommand> Pair(List<SbCommand> commands)
     {
         var consumed = new HashSet<int>();
@@ -72,37 +82,34 @@ public static class OsbvWriter
             if (commands[i] is SbValueCommand { Kind: SbCommandKind.MoveX } mx)
             {
                 var j = FindMatch(commands, i, mx, SbCommandKind.MoveY);
-                if (j >= 0) { consumed.Add(j); yield return new Pair2("M", mx, (SbValueCommand)commands[j]); continue; }
+                if (j >= 0)
+                {
+                    consumed.Add(j);
+                    yield return new Pair2("M", mx, (SbValueCommand)commands[j]);
+                    continue;
+                }
             }
+
             if (commands[i] is SbValueCommand { Kind: SbCommandKind.VectorScaleX } vx)
             {
                 var j = FindMatch(commands, i, vx, SbCommandKind.VectorScaleY);
-                if (j >= 0) { consumed.Add(j); yield return new Pair2("V", vx, (SbValueCommand)commands[j]); continue; }
+                if (j >= 0)
+                {
+                    consumed.Add(j);
+                    yield return new Pair2("V", vx, (SbValueCommand)commands[j]);
+                    continue;
+                }
             }
 
             yield return commands[i];
         }
     }
 
-    private static int FindMatch(List<SbCommand> commands, int i, SbValueCommand a, SbCommandKind pairKind) =>
-        commands.FindIndex(i + 1, c => c is SbValueCommand v && v.Kind == pairKind && v.StartMs == a.StartMs && v.EndMs == a.EndMs && v.Easing == a.Easing);
-
-    private sealed class Pair2 : SbCommand
+    private static int FindMatch(List<SbCommand> commands, int i, SbValueCommand a, SbCommandKind pairKind)
     {
-        public string Acronym { get; }
-        public SbValueCommand X { get; }
-        public SbValueCommand Y { get; }
-
-        [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
-        public Pair2(string acronym, SbValueCommand x, SbValueCommand y)
-        {
-            Acronym = acronym;
-            X = x;
-            Y = y;
-            StartMs = x.StartMs;
-            EndMs = x.EndMs;
-            Easing = x.Easing;
-        }
+        return commands.FindIndex(i + 1,
+            c => c is SbValueCommand v && v.Kind == pairKind && v.StartMs.IsEqual(a.StartMs) && v.EndMs.IsEqual(a.EndMs) &&
+                 v.Easing == a.Easing);
     }
 
     private static void WriteCommand(TextWriter w, SbCommand cmd, int depth)
@@ -111,15 +118,18 @@ public static class OsbvWriter
         switch (cmd)
         {
             case Pair2 p:
-                w.WriteLine($"{indent}{p.Acronym},{(int)p.X.Easing},{T(p.X.StartMs)},{T(p.X.EndMs)},{FF(p.X.Start)},{FF(p.Y.Start)},{FF(p.X.End)},{FF(p.Y.End)}");
+                w.WriteLine(
+                    $"{indent}{p.Acronym},{(int)p.X.Easing},{T(p.X.StartMs)},{T(p.X.EndMs)},{Ff(p.X.Start)},{Ff(p.Y.Start)},{Ff(p.X.End)},{Ff(p.Y.End)}");
                 break;
 
             case SbValueCommand v:
-                w.WriteLine($"{indent}{Acronym(v.Kind)},{(int)v.Easing},{T(v.StartMs)},{T(v.EndMs)},{FF(v.Start)},{FF(v.End)}");
+                w.WriteLine(
+                    $"{indent}{Acronym(v.Kind)},{(int)v.Easing},{T(v.StartMs)},{T(v.EndMs)},{Ff(v.Start)},{Ff(v.End)}");
                 break;
 
             case SbColourCommand c:
-                w.WriteLine($"{indent}C,{(int)c.Easing},{T(c.StartMs)},{T(c.EndMs)},{c.Start.R},{c.Start.G},{c.Start.B},{c.End.R},{c.End.G},{c.End.B}");
+                w.WriteLine(
+                    $"{indent}C,{(int)c.Easing},{T(c.StartMs)},{T(c.EndMs)},{c.Start.R},{c.Start.G},{c.Start.B},{c.End.R},{c.End.G},{c.End.B}");
                 break;
 
             case SbFlagCommand f:
@@ -143,25 +153,60 @@ public static class OsbvWriter
         }
     }
 
-    private static string Acronym(SbCommandKind kind) => kind switch
+    private static string Acronym(SbCommandKind kind)
     {
-        SbCommandKind.Fade => "F",
-        SbCommandKind.MoveX => "MX",
-        SbCommandKind.MoveY => "MY",
-        SbCommandKind.Scale => "S",
-        SbCommandKind.Rotate => "R",
-        _ => throw new NotSupportedException($"{kind} has no standalone acronym (paired command?)"),
-    };
+        return kind switch
+        {
+            SbCommandKind.Fade => "F",
+            SbCommandKind.MoveX => "MX",
+            SbCommandKind.MoveY => "MY",
+            SbCommandKind.Scale => "S",
+            SbCommandKind.Rotate => "R",
+            _ => throw new NotSupportedException($"{kind} has no standalone acronym (paired command?)")
+        };
+    }
 
-    private static char FlagLetter(SbCommandKind kind) => kind switch
+    private static char FlagLetter(SbCommandKind kind)
     {
-        SbCommandKind.FlipH => 'H',
-        SbCommandKind.FlipV => 'V',
-        SbCommandKind.Additive => 'A',
-        _ => throw new NotSupportedException($"{kind} is not a flag command"),
-    };
+        return kind switch
+        {
+            SbCommandKind.FlipH => 'H',
+            SbCommandKind.FlipV => 'V',
+            SbCommandKind.Additive => 'A',
+            _ => throw new NotSupportedException($"{kind} is not a flag command")
+        };
+    }
 
-    private static string T(double ms) => ((long)Math.Round(ms, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture);
-    private static string F(double value) => value.ToString(CultureInfo.InvariantCulture);
-    private static string FF(float value) => value.ToString(CultureInfo.InvariantCulture);
+    private static string T(double ms)
+    {
+        return ((long)Math.Round(ms, MidpointRounding.AwayFromZero)).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string F(double value)
+    {
+        return value.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string Ff(float value)
+    {
+        return value.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private sealed class Pair2 : SbCommand
+    {
+        [SetsRequiredMembers]
+        public Pair2(string acronym, SbValueCommand x, SbValueCommand y)
+        {
+            Acronym = acronym;
+            X = x;
+            Y = y;
+            StartMs = x.StartMs;
+            EndMs = x.EndMs;
+            Easing = x.Easing;
+        }
+
+        public string Acronym { get; }
+        public SbValueCommand X { get; }
+        public SbValueCommand Y { get; }
+    }
 }

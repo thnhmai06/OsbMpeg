@@ -1,9 +1,8 @@
-namespace OsbMpeg.Encoder;
+namespace OsbMpeg.Compiler.Encoder;
 
 public sealed record EncodeProgress(
     int FrameIndex,
     int EstimatedTotalFrames,
-    double CurrentTimeSeconds,
     int SpriteCount,
     int CommandCount,
     int AssetCount,

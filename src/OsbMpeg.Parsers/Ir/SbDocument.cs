@@ -1,16 +1,8 @@
-namespace OsbMpeg.Ir;
+namespace OsbMpeg.Parsers.Ir;
 
 public sealed class SbDocument
 {
     public Dictionary<SbLayer, List<SbObject>> Layers { get; } = new();
-    public Dictionary<string, string> Variables { get; } = new();
-
-    public void Add(SbObject obj)
-    {
-        if (!Layers.TryGetValue(obj.Layer, out var list))
-            Layers[obj.Layer] = list = [];
-        list.Add(obj);
-    }
 
     public IEnumerable<SbObject> AllObjects => Layers.Values.SelectMany(l => l);
 
@@ -18,6 +10,13 @@ public sealed class SbDocument
     public int AnimationCount => AllObjects.Count(o => o is SbAnimation);
 
     public int CommandCount => AllObjects.Sum(o => CountCommands(o.Commands));
+
+    public void Add(SbObject obj)
+    {
+        if (!Layers.TryGetValue(obj.Layer, out var list))
+            Layers[obj.Layer] = list = [];
+        list.Add(obj);
+    }
 
     private static int CountCommands(IEnumerable<SbCommand> commands)
     {
@@ -29,9 +28,10 @@ public sealed class SbDocument
             {
                 SbLoop l => CountCommands(l.Children),
                 SbTrigger t => CountCommands(t.Children),
-                _ => 0,
+                _ => 0
             };
         }
+
         return count;
     }
 }

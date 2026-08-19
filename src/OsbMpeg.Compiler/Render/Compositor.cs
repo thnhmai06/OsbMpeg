@@ -1,18 +1,11 @@
-namespace OsbMpeg.Render;
+namespace OsbMpeg.Compiler.Render;
 
 /// <summary>Plain RGB24 framebuffer the renderer composites into.</summary>
-public sealed class Canvas
+public sealed class Canvas(int width, int height)
 {
-    public int Width { get; }
-    public int Height { get; }
-    public byte[] Rgb { get; }
-
-    public Canvas(int width, int height)
-    {
-        Width = width;
-        Height = height;
-        Rgb = new byte[width * height * 3];
-    }
+    public int Width { get; } = width;
+    public int Height { get; } = height;
+    public byte[] Rgb { get; } = new byte[width * height * 3];
 
     public void Clear(byte r, byte g, byte b)
     {
@@ -27,12 +20,14 @@ public sealed class Canvas
 
 public readonly record struct SpriteFrame(byte[] Rgb, int Width, int Height);
 
-/// <summary>Blits a (possibly rotated/scaled/tinted) source image onto a destination canvas.
-/// Straight (non-premultiplied) alpha, matching lazer's BlendingParameters: normal blend is
-/// dst*(1-a) + src*a; additive is dst + src*a — verified against osu-framework's
-/// BlendingParameters.Mixture/Additive struct literals (Source=SrcAlpha in both; Destination
-/// is OneMinusSrcAlpha for normal, One for additive). Nearest-neighbor sampling — ponytail: no
-/// bilinear filtering, add if reconstructed frames show visible aliasing on rotated/scaled tiles.</summary>
+/// <summary>
+///     Blits a (possibly rotated/scaled/tinted) source image onto a destination canvas.
+///     Straight (non-premultiplied) alpha, matching lazer's BlendingParameters: normal blend is
+///     dst*(1-a) + src*a; additive is dst + src*a — verified against osu-framework's
+///     BlendingParameters.Mixture/Additive struct literals (Source=SrcAlpha in both; Destination
+///     is OneMinusSrcAlpha for normal, One for additive). Nearest-neighbor sampling — ponytail: no
+///     bilinear filtering, add if reconstructed frames show visible aliasing on rotated/scaled tiles.
+/// </summary>
 public static class Compositor
 {
     public static void Blit(
@@ -53,13 +48,6 @@ public static class Compositor
         var cos = Math.Cos(rotationRadians);
         var sin = Math.Sin(rotationRadians);
 
-        (double X, double Y) Forward(double localX, double localY)
-        {
-            var sx = (localX - pivotX) * scaleX;
-            var sy = (localY - pivotY) * scaleY;
-            return (sx * cos - sy * sin + posX, sx * sin + sy * cos + posY);
-        }
-
         var c0 = Forward(0, 0);
         var c1 = Forward(src.Width, 0);
         var c2 = Forward(0, src.Height);
@@ -76,46 +64,64 @@ public static class Compositor
         var invScaleY = 1.0 / scaleY;
 
         for (var py = minY; py <= maxY; py++)
+        for (var px = minX; px <= maxX; px++)
         {
-            for (var px = minX; px <= maxX; px++)
+            var dx = px + 0.5 - posX;
+            var dy = py + 0.5 - posY;
+            // inverse rotation (R(-theta)) then inverse scale, back to source-local pixel space
+            var rx = dx * cos + dy * sin;
+            var ry = -dx * sin + dy * cos;
+            var lx = rx * invScaleX + pivotX;
+            var ly = ry * invScaleY + pivotY;
+
+            var sxPix = (int)Math.Floor(lx);
+            var syPix = (int)Math.Floor(ly);
+            if (sxPix < 0 || sxPix >= src.Width || syPix < 0 || syPix >= src.Height)
+                continue;
+
+            var srcIdx = (syPix * src.Width + sxPix) * 3;
+            var dstIdx = (py * dst.Width + px) * 3;
+
+            var r = src.Rgb[srcIdx] * tintR / 255.0;
+            var g = src.Rgb[srcIdx + 1] * tintG / 255.0;
+            var b = src.Rgb[srcIdx + 2] * tintB / 255.0;
+
+            if (additive)
             {
-                var dx = px + 0.5 - posX;
-                var dy = py + 0.5 - posY;
-                // inverse rotation (R(-theta)) then inverse scale, back to source-local pixel space
-                var rx = dx * cos + dy * sin;
-                var ry = -dx * sin + dy * cos;
-                var lx = rx * invScaleX + pivotX;
-                var ly = ry * invScaleY + pivotY;
-
-                var sxPix = (int)Math.Floor(lx);
-                var syPix = (int)Math.Floor(ly);
-                if (sxPix < 0 || sxPix >= src.Width || syPix < 0 || syPix >= src.Height)
-                    continue;
-
-                var srcIdx = (syPix * src.Width + sxPix) * 3;
-                var dstIdx = (py * dst.Width + px) * 3;
-
-                var r = src.Rgb[srcIdx] * tintR / 255.0;
-                var g = src.Rgb[srcIdx + 1] * tintG / 255.0;
-                var b = src.Rgb[srcIdx + 2] * tintB / 255.0;
-
-                if (additive)
-                {
-                    dst.Rgb[dstIdx] = ClampByte(dst.Rgb[dstIdx] + r * alpha);
-                    dst.Rgb[dstIdx + 1] = ClampByte(dst.Rgb[dstIdx + 1] + g * alpha);
-                    dst.Rgb[dstIdx + 2] = ClampByte(dst.Rgb[dstIdx + 2] + b * alpha);
-                }
-                else
-                {
-                    dst.Rgb[dstIdx] = ClampByte(dst.Rgb[dstIdx] * (1 - alpha) + r * alpha);
-                    dst.Rgb[dstIdx + 1] = ClampByte(dst.Rgb[dstIdx + 1] * (1 - alpha) + g * alpha);
-                    dst.Rgb[dstIdx + 2] = ClampByte(dst.Rgb[dstIdx + 2] * (1 - alpha) + b * alpha);
-                }
+                dst.Rgb[dstIdx] = ClampByte(dst.Rgb[dstIdx] + r * alpha);
+                dst.Rgb[dstIdx + 1] = ClampByte(dst.Rgb[dstIdx + 1] + g * alpha);
+                dst.Rgb[dstIdx + 2] = ClampByte(dst.Rgb[dstIdx + 2] + b * alpha);
             }
+            else
+            {
+                dst.Rgb[dstIdx] = ClampByte(dst.Rgb[dstIdx] * (1 - alpha) + r * alpha);
+                dst.Rgb[dstIdx + 1] = ClampByte(dst.Rgb[dstIdx + 1] * (1 - alpha) + g * alpha);
+                dst.Rgb[dstIdx + 2] = ClampByte(dst.Rgb[dstIdx + 2] * (1 - alpha) + b * alpha);
+            }
+        }
+
+        return;
+
+        (double X, double Y) Forward(double localX, double localY)
+        {
+            var sx = (localX - pivotX) * scaleX;
+            var sy = (localY - pivotY) * scaleY;
+            return (sx * cos - sy * sin + posX, sx * sin + sy * cos + posY);
         }
     }
 
-    private static double Min4(double a, double b, double c, double d) => Math.Min(Math.Min(a, b), Math.Min(c, d));
-    private static double Max4(double a, double b, double c, double d) => Math.Max(Math.Max(a, b), Math.Max(c, d));
-    private static byte ClampByte(double v) => (byte)Math.Clamp(v, 0, 255);
+    private static double Min4(double a, double b, double c, double d)
+    {
+        return Math.Min(Math.Min(a, b), Math.Min(c, d));
+    }
+
+    private static double Max4(double a, double b, double c, double d)
+    {
+        return Math.Max(Math.Max(a, b), Math.Max(c, d));
+    }
+
+    private static byte ClampByte(double v)
+    {
+        return (byte)Math.Clamp(v, 0, 255);
+    }
 }

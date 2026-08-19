@@ -1,12 +1,14 @@
-using OsbMpeg.Media;
-using OsbMpeg.Osbv;
+using OsbMpeg.Compiler.Media;
+using OsbMpeg.Parsers.Osbv;
 
-namespace OsbMpeg.VideoCompilation;
+namespace OsbMpeg.Compiler.Compilation;
 
-/// <summary>One shared decode job: every AnimationVideo in Members reduced to the same
-/// VideoSourceKey, extracted once over their union time range. VideoId is a stable, 0-based
-/// hex counter in first-seen order — matches the existing asset path convention
-/// (video-id/s/&lt;hex&gt;.png, video-id/a/&lt;hex&gt;/f&lt;n&gt;.png).</summary>
+/// <summary>
+///     One shared decode job: every AnimationVideo in Members reduced to the same
+///     VideoSourceKey, extracted once over their union time range. VideoId is a stable, 0-based
+///     hex counter in first-seen order — matches the existing asset path convention
+///     (video-id/s/&lt;hex&gt;.png, video-id/a/&lt;hex&gt;/f&lt;n&gt;.png).
+/// </summary>
 public sealed record VideoSourcePlan(
     VideoSourceKey Key,
     string VideoId,
@@ -15,10 +17,12 @@ public sealed record VideoSourcePlan(
     double UnionEndMs,
     IReadOnlyList<OsbvAnimationVideo> Members);
 
-/// <summary>Groups a document's AnimationVideo objects by VideoSourceKey and computes each
-/// group's union extraction window. Probing is injected as a delegate so this stays pure
-/// logic, testable without ffprobe or real files — the real caller wires
-/// MediaProbe.AnalyseAsync.</summary>
+/// <summary>
+///     Groups a document's AnimationVideo objects by VideoSourceKey and computes each
+///     group's union extraction window. Probing is injected as a delegate so this stays pure
+///     logic, testable without ffprobe or real files — the real caller wires
+///     MediaProbe.AnalyseAsync.
+/// </summary>
 public static class VideoSourcePlanner
 {
     public static async Task<IReadOnlyList<VideoSourcePlan>> PlanAsync(
@@ -43,6 +47,7 @@ public static class VideoSourcePlanner
                 durations[key] = info.Duration.TotalMilliseconds;
                 orderedKeys.Add(key);
             }
+
             list.Add(v);
         }
 
@@ -56,6 +61,7 @@ public static class VideoSourcePlanner
             var end = group.Max(m => m.VideoEndMs ?? durationMs);
             plans.Add(new VideoSourcePlan(key, i.ToString("x"), durationMs, start, end, group));
         }
+
         return plans;
     }
 }

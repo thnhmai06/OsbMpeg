@@ -1,15 +1,17 @@
-using OsbMpeg.Ir;
-using OsuParsers.Storyboards;
+using OsbMpeg.Parsers.Ir;
 using OsuParsers.Storyboards.Commands;
+using OsuParsers.Storyboards.Interfaces;
 using OsuParsers.Storyboards.Objects;
 using OsuCommandType = OsuParsers.Enums.Storyboards.CommandType;
 
-namespace OsbMpeg.Osb;
+namespace OsbMpeg.Parsers.Osb;
 
-/// <summary>Converts an OsuParsers-decoded Storyboard into our IR so the same
-/// SoftwareStoryboardRenderer can play back a .osb regardless of whether we wrote it
-/// ourselves. Enum numeric values were verified to match 1:1 (Origins, Easing, LoopType all
-/// share identical member names/order with our Sb* enums), so most mapping is a plain cast.</summary>
+/// <summary>
+///     Converts an OsuParsers-decoded Storyboard into our IR so the same
+///     SoftwareStoryboardRenderer can play back a .osb regardless of whether we wrote it
+///     ourselves. Enum numeric values were verified to match 1:1 (Origins, Easing, LoopType all
+///     share identical member names/order with our Sb* enums), so most mapping is a plain cast.
+/// </summary>
 public static class OsbReader
 {
     public static SbDocument Read(string osbPath)
@@ -27,10 +29,9 @@ public static class OsbReader
         return doc;
     }
 
-    private static void AddLayer(SbDocument doc, SbLayer layer, List<OsuParsers.Storyboards.Interfaces.IStoryboardObject> objects)
+    private static void AddLayer(SbDocument doc, SbLayer layer, List<IStoryboardObject> objects)
     {
         foreach (var obj in objects)
-        {
             switch (obj)
             {
                 case StoryboardSprite sprite:
@@ -41,7 +42,7 @@ public static class OsbReader
                         X = sprite.X,
                         Y = sprite.Y,
                         Asset = new AssetId(sprite.FilePath),
-                        Commands = ConvertCommands(sprite.Commands),
+                        Commands = ConvertCommands(sprite.Commands)
                     });
                     break;
 
@@ -56,11 +57,10 @@ public static class OsbReader
                         FrameCount = animation.FrameCount,
                         FrameDelayMs = animation.FrameDelay,
                         LoopType = (SbLoopType)(int)animation.LoopType,
-                        Commands = ConvertCommands(animation.Commands),
+                        Commands = ConvertCommands(animation.Commands)
                     });
                     break;
             }
-        }
     }
 
 
@@ -71,28 +71,20 @@ public static class OsbReader
         foreach (var c in group.Commands)
             AddValueCommand(result, c);
 
-        foreach (var loop in group.Loops)
+        result.AddRange(group.Loops.Select(loop => new SbLoop
         {
-            result.Add(new SbLoop
-            {
-                StartMs = loop.LoopStartTime,
-                EndMs = loop.LoopStartTime,
-                Count = loop.LoopCount,
-                Children = ConvertCommands(loop.Commands),
-            });
-        }
+            StartMs = loop.LoopStartTime, EndMs = loop.LoopStartTime, Count = loop.LoopCount,
+            Children = ConvertCommands(loop.Commands)
+        }));
 
-        foreach (var trigger in group.Triggers)
+        result.AddRange(group.Triggers.Select(trigger => new SbTrigger
         {
-            result.Add(new SbTrigger
-            {
-                StartMs = trigger.TriggerStartTime,
-                EndMs = trigger.TriggerEndTime,
-                Name = trigger.TriggerName,
-                Group = trigger.GroupNumber,
-                Children = ConvertCommands(trigger.Commands),
-            });
-        }
+            StartMs = trigger.TriggerStartTime,
+            EndMs = trigger.TriggerEndTime,
+            Name = trigger.TriggerName,
+            Group = trigger.GroupNumber,
+            Children = ConvertCommands(trigger.Commands)
+        }));
 
         return result;
     }
@@ -103,27 +95,63 @@ public static class OsbReader
         switch (c.Type)
         {
             case OsuCommandType.Fade:
-                result.Add(new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartFloat, End = c.EndFloat });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.Fade, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartFloat, End = c.EndFloat
+                });
                 break;
             case OsuCommandType.MovementX:
-                result.Add(new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartFloat, End = c.EndFloat });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.MoveX, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartFloat, End = c.EndFloat
+                });
                 break;
             case OsuCommandType.MovementY:
-                result.Add(new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartFloat, End = c.EndFloat });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.MoveY, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartFloat, End = c.EndFloat
+                });
                 break;
             case OsuCommandType.Movement:
-                result.Add(new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartVector.X, End = c.EndVector.X });
-                result.Add(new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartVector.Y, End = c.EndVector.Y });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.MoveX, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartVector.X, End = c.EndVector.X
+                });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.MoveY, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartVector.Y, End = c.EndVector.Y
+                });
                 break;
             case OsuCommandType.Scale:
-                result.Add(new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartFloat, End = c.EndFloat });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.Scale, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartFloat, End = c.EndFloat
+                });
                 break;
             case OsuCommandType.VectorScale:
-                result.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartVector.X, End = c.EndVector.X });
-                result.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartVector.Y, End = c.EndVector.Y });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.VectorScaleX, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartVector.X, End = c.EndVector.X
+                });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.VectorScaleY, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartVector.Y, End = c.EndVector.Y
+                });
                 break;
             case OsuCommandType.Rotation:
-                result.Add(new SbValueCommand { Kind = SbCommandKind.Rotate, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing, Start = c.StartFloat, End = c.EndFloat });
+                result.Add(new SbValueCommand
+                {
+                    Kind = SbCommandKind.Rotate, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing,
+                    Start = c.StartFloat, End = c.EndFloat
+                });
                 break;
             case OsuCommandType.Colour:
                 result.Add(new SbColourCommand
@@ -132,18 +160,25 @@ public static class OsbReader
                     EndMs = c.EndTime,
                     Easing = easing,
                     Start = new SbColor(c.StartColour.R, c.StartColour.G, c.StartColour.B),
-                    End = new SbColor(c.EndColour.R, c.EndColour.G, c.EndColour.B),
+                    End = new SbColor(c.EndColour.R, c.EndColour.G, c.EndColour.B)
                 });
                 break;
             case OsuCommandType.FlipHorizontal:
-                result.Add(new SbFlagCommand { Kind = SbCommandKind.FlipH, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing });
+                result.Add(new SbFlagCommand
+                    { Kind = SbCommandKind.FlipH, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing });
                 break;
             case OsuCommandType.FlipVertical:
-                result.Add(new SbFlagCommand { Kind = SbCommandKind.FlipV, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing });
+                result.Add(new SbFlagCommand
+                    { Kind = SbCommandKind.FlipV, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing });
                 break;
             case OsuCommandType.BlendingMode:
-                result.Add(new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing });
+                result.Add(new SbFlagCommand
+                    { Kind = SbCommandKind.Additive, StartMs = c.StartTime, EndMs = c.EndTime, Easing = easing });
                 break;
+            case OsuCommandType.None:
+                break;
+            default:
+                throw new ArgumentOutOfRangeException();
         }
     }
 }

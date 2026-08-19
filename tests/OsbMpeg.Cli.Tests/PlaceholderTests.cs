@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace OsbMpeg.Tests;
+namespace OsbMpeg.Cli.Tests;
 
 public class PlaceholderTests
 {

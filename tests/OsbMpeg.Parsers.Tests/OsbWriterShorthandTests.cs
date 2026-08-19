@@ -1,9 +1,8 @@
-using OsbMpeg.Ir;
-using OsbMpeg.Osb;
+using OsbMpeg.Parsers.Ir;
+using OsbMpeg.Parsers.Osb;
 using Xunit;
-using System.Linq;
 
-namespace OsbMpeg.Tests;
+namespace OsbMpeg.Parsers.Tests;
 
 public class OsbWriterShorthandTests
 {
@@ -17,7 +16,7 @@ public class OsbWriterShorthandTests
             X = 0,
             Y = 0,
             Asset = new AssetId("a.png"),
-            Commands = commands,
+            Commands = commands
         });
 
         var path = Path.GetTempFileName();
@@ -35,7 +34,9 @@ public class OsbWriterShorthandTests
     [Fact]
     public void EqualStartEndTime_LeavesEndTimeFieldBlank()
     {
-        var lines = WriteAndReadCommandLines([new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 1000, EndMs = 1000, Start = 0.5f, End = 0.5f }]);
+        var lines = WriteAndReadCommandLines([
+            new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 1000, EndMs = 1000, Start = 0.5f, End = 0.5f }
+        ]);
 
         Assert.Equal("F,0,1000,,0.5", Assert.Single(lines));
     }
@@ -43,7 +44,9 @@ public class OsbWriterShorthandTests
     [Fact]
     public void DifferentStartEndTime_WritesBothTimeFields()
     {
-        var lines = WriteAndReadCommandLines([new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 1000, Start = 0, End = 0.5f }]);
+        var lines = WriteAndReadCommandLines([
+            new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = 0, EndMs = 1000, Start = 0, End = 0.5f }
+        ]);
 
         Assert.Equal("F,0,0,1000,0,0.5", Assert.Single(lines));
     }
@@ -51,7 +54,9 @@ public class OsbWriterShorthandTests
     [Fact]
     public void EqualStartEndValue_DropsEndValueField()
     {
-        var lines = WriteAndReadCommandLines([new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = 0, EndMs = 1000, Start = 2f, End = 2f }]);
+        var lines = WriteAndReadCommandLines([
+            new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = 0, EndMs = 1000, Start = 2f, End = 2f }
+        ]);
 
         Assert.Equal("S,0,0,1000,2", Assert.Single(lines));
     }
@@ -62,7 +67,7 @@ public class OsbWriterShorthandTests
         var lines = WriteAndReadCommandLines(
         [
             new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = 0, EndMs = 1000, Start = 1f, End = 1f },
-            new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = 0, EndMs = 1000, Start = 2f, End = 2f },
+            new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = 0, EndMs = 1000, Start = 2f, End = 2f }
         ]);
 
         Assert.Equal("V,0,0,1000,1,2", Assert.Single(lines));
@@ -74,7 +79,7 @@ public class OsbWriterShorthandTests
         var lines = WriteAndReadCommandLines(
         [
             new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = 0, EndMs = 1000, Start = 1f, End = 1f },
-            new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = 0, EndMs = 1000, Start = 2f, End = 3f },
+            new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = 0, EndMs = 1000, Start = 2f, End = 3f }
         ]);
 
         Assert.Equal("V,0,0,1000,1,2,1,3", Assert.Single(lines));
@@ -83,7 +88,9 @@ public class OsbWriterShorthandTests
     [Fact]
     public void Colour_UnchangedAcrossSpan_DropsEndTriple()
     {
-        var lines = WriteAndReadCommandLines([new SbColourCommand { StartMs = 0, EndMs = 1000, Start = SbColor.White, End = SbColor.White }]);
+        var lines = WriteAndReadCommandLines([
+            new SbColourCommand { StartMs = 0, EndMs = 1000, Start = SbColor.White, End = SbColor.White }
+        ]);
 
         Assert.Equal("C,0,0,1000,255,255,255", Assert.Single(lines));
     }
@@ -91,7 +98,9 @@ public class OsbWriterShorthandTests
     [Fact]
     public void FlagCommand_AlwaysSingleFieldForm()
     {
-        var lines = WriteAndReadCommandLines([new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = 0, EndMs = 1000 }]);
+        var lines = WriteAndReadCommandLines([
+            new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = 0, EndMs = 1000 }
+        ]);
 
         Assert.Equal("P,0,0,1000,A", Assert.Single(lines));
     }

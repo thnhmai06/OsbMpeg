@@ -1,4 +1,4 @@
-namespace OsbMpeg.Ir;
+namespace OsbMpeg.Parsers.Ir;
 
 public readonly record struct SbColor(byte R, byte G, byte B)
 {

@@ -1,12 +1,17 @@
-using OsbMpeg.Osb;
+using System.Text.Json;
+using OsbMpeg.Cli.Settings;
+using OsbMpeg.Parsers.Osb;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
-namespace OsbMpeg.Cli;
+namespace OsbMpeg.Cli.Commands;
 
 public sealed class InspectCommand : AsyncCommand<InspectSettings>
 {
-    protected override Task<int> ExecuteAsync(CommandContext context, InspectSettings settings, CancellationToken cancellationToken)
+    private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
+    
+    protected override Task<int> ExecuteAsync(CommandContext context, InspectSettings settings,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(settings.Input))
         {
@@ -23,9 +28,9 @@ public sealed class InspectCommand : AsyncCommand<InspectSettings>
                 doc.SpriteCount,
                 doc.AnimationCount,
                 doc.CommandCount,
-                Layers = doc.Layers.ToDictionary(l => l.Key.ToString(), l => l.Value.Count),
+                Layers = doc.Layers.ToDictionary(l => l.Key.ToString(), l => l.Value.Count)
             };
-            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(summary, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            Console.WriteLine(JsonSerializer.Serialize(summary, SerializerOptions));
             return Task.FromResult(0);
         }
 

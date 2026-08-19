@@ -1,15 +1,18 @@
 using System.Diagnostics;
-using OsbMpeg.Ir;
-using OsbMpeg.Media;
-using OsbMpeg.Osb;
+using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Osb;
+using OsbMpeg.Parsers.Ir;
+using OsbMpeg.Parsers.Osb;
 
-namespace OsbMpeg.Encoder;
+namespace OsbMpeg.Compiler.Encoder;
 
-/// <summary>Orchestrates the MVP encode path: stream decoded frames, run the tile-grid
-/// conditional-replenishment backbone (Sprite-per-run + content-hash dedupe — see the design
-/// notes for why this beats Animation-first as the default), write IR straight to .osb, and
-/// round-trip-validate the result. No motion/region/RDO layer yet — those are optimizer-phase
-/// candidates that must win on cost, not baseline dependencies.</summary>
+/// <summary>
+///     Orchestrates the MVP encode path: stream decoded frames, run the tile-grid
+///     conditional-replenishment backbone (Sprite-per-run + content-hash dedupe — see the design
+///     notes for why this beats Animation-first as the default), write IR straight to .osb, and
+///     round-trip-validate the result. No motion/region/RDO layer yet — those are optimizer-phase
+///     candidates that must win on cost, not baseline dependencies.
+/// </summary>
 public sealed class EncodePipeline(EncodeOptions options)
 {
     public async Task<EncodeStatistics> RunAsync(Action<EncodeProgress>? onProgress, CancellationToken ct = default)
@@ -28,7 +31,8 @@ public sealed class EncodePipeline(EncodeOptions options)
             Directory.CreateDirectory(outputDir);
         Directory.CreateDirectory(options.AssetDir);
 
-        var assetStore = new AssetStore(options.AssetDir, options.AssetRelativeDir, options.AssetNamePrefix, options.Colors, options.PngCompressionLevel);
+        var assetStore = new AssetStore(options.AssetDir, options.AssetRelativeDir, options.AssetNamePrefix,
+            options.Colors, options.PngCompressionLevel);
         var doc = new SbDocument();
         var mapping = new CanvasMapping(width, height);
 
@@ -36,10 +40,11 @@ public sealed class EncodePipeline(EncodeOptions options)
             options.InputPath, width, height, fps, options.Start, options.Duration,
             options.TileSize, options.HashQuantLevels, options.RawSnapshot, options.TileTolerance, options.Gop,
             options.MinAnimationUniqueness, options.NoQuadtree, options.MaxAssetPixels,
-            Targets: [new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add)]);
+            [new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add)]);
 
         var result = await TileEncodeLoop.RunAsync(loopOptions, assetStore,
-            (frame, pts) => onProgress?.Invoke(new EncodeProgress(frame, estimatedTotalFrames, pts, doc.SpriteCount, doc.CommandCount, assetStore.FileCount, assetStore.TotalBytes)),
+            (frame, pts) => onProgress?.Invoke(new EncodeProgress(frame, estimatedTotalFrames, doc.SpriteCount,
+                doc.CommandCount, assetStore.FileCount, assetStore.TotalBytes)),
             ct);
         var frameCount = result.FrameCount;
 
@@ -48,7 +53,8 @@ public sealed class EncodePipeline(EncodeOptions options)
 
         stopwatch.Stop();
 
-        var naive = await NaiveBaseline.EstimateAsync(options.InputPath, width, height, options.Start, options.Duration, frameCount, ct);
+        var naive = await NaiveBaseline.EstimateAsync(options.InputPath, width, height, options.Start, options.Duration,
+            frameCount, ct);
 
         return new EncodeStatistics
         {
@@ -68,7 +74,7 @@ public sealed class EncodePipeline(EncodeOptions options)
             NaiveEstimatedBytes = naive.EstimatedStoryboardBytes,
             OsbFileBytes = new FileInfo(options.OutputPath).Length,
             SourceFileBytes = new FileInfo(options.InputPath).Length,
-            EncodeTime = stopwatch.Elapsed,
+            EncodeTime = stopwatch.Elapsed
         };
     }
 }

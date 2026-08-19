@@ -1,12 +1,12 @@
 <Solution>
-  <Folder Name="/Sources/">
-    <Project Path="src/OsbMpeg.Cli/OsbMpeg.Cli.csproj" />
-    <Project Path="src/OsbMpeg.Compiler/OsbMpeg.Compiler.csproj" />
-    <Project Path="src/OsbMpeg.Parsers/OsbMpeg.Parsers.csproj" />
-  </Folder>
-  <Folder Name="/Tests/">
-    <Project Path="tests/OsbMpeg.Cli.Tests/OsbMpeg.Cli.Tests.csproj" />
-    <Project Path="tests/OsbMpeg.Compiler.Tests/OsbMpeg.Compiler.Tests.csproj" />
-    <Project Path="tests/OsbMpeg.Parsers.Tests/OsbMpeg.Parsers.Tests.csproj" />
-  </Folder>
+    <Folder Name="/Sources/">
+        <Project Path="src/OsbMpeg.Cli/OsbMpeg.Cli.csproj"/>
+        <Project Path="src/OsbMpeg.Compiler/OsbMpeg.Compiler.csproj"/>
+        <Project Path="src/OsbMpeg.Parsers/OsbMpeg.Parsers.csproj"/>
+    </Folder>
+    <Folder Name="/Tests/">
+        <Project Path="tests/OsbMpeg.Cli.Tests/OsbMpeg.Cli.Tests.csproj"/>
+        <Project Path="tests/OsbMpeg.Compiler.Tests/OsbMpeg.Compiler.Tests.csproj"/>
+        <Project Path="tests/OsbMpeg.Parsers.Tests/OsbMpeg.Parsers.Tests.csproj"/>
+    </Folder>
 </Solution>

@@ -1,13 +1,15 @@
 using FFMpegCore;
-using OsbMpeg.Media;
+using OsbMpeg.Cli.Settings;
+using OsbMpeg.Compiler.Media;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
-namespace OsbMpeg.Cli;
+namespace OsbMpeg.Cli.Commands;
 
 public sealed class ProbeCommand : AsyncCommand<ProbeSettings>
 {
-    protected override async Task<int> ExecuteAsync(CommandContext context, ProbeSettings settings, CancellationToken cancellationToken)
+    protected override async Task<int> ExecuteAsync(CommandContext context, ProbeSettings settings,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(settings.Input))
         {
@@ -18,7 +20,7 @@ public sealed class ProbeCommand : AsyncCommand<ProbeSettings>
         if (settings.FFmpegPath is not null)
             GlobalFFOptions.Configure(o => o.BinaryFolder = settings.FFmpegPath);
 
-        var info = await MediaProbe.AnalyseAsync(settings.Input);
+        var info = await MediaProbe.AnalyseAsync(settings.Input, cancellationToken);
 
         var table = new Table().Border(TableBorder.Rounded).Title(settings.Input);
         table.AddColumn("");

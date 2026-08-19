@@ -1,13 +1,19 @@
-﻿using OsbMpeg.Ir;
-using OsbMpeg.Ir.Passes;
+﻿using OsbMpeg.Parsers.Ir;
+using OsbMpeg.Parsers.Ir.Passes;
 using Xunit;
 
-namespace OsbMpeg.Tests;
+namespace OsbMpeg.Parsers.Tests;
 
 public class MergeAdjacentCommandsTests
 {
-    private static SbValueCommand Move(double start, double end, float startVal, float endVal, SbEasing easing = SbEasing.None) =>
-        new() { Kind = SbCommandKind.MoveX, StartMs = start, EndMs = end, Start = startVal, End = endVal, Easing = easing };
+    private static SbValueCommand Move(double start, double end, float startVal, float endVal,
+        SbEasing easing = SbEasing.None)
+    {
+        return new SbValueCommand
+        {
+            Kind = SbCommandKind.MoveX, StartMs = start, EndMs = end, Start = startVal, End = endVal, Easing = easing
+        };
+    }
 
     [Fact]
     public void CollinearAdjacentSegments_MergeIntoOne()
@@ -64,7 +70,7 @@ public class MergeAdjacentCommandsTests
         var commands = new List<SbCommand>
         {
             Move(0, 1000, 0, 100),
-            new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = 1000, EndMs = 2000, Start = 100, End = 200 },
+            new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = 1000, EndMs = 2000, Start = 100, End = 200 }
         };
 
         var merged = MergeAdjacentCommands.Merge(commands);
@@ -75,7 +81,7 @@ public class MergeAdjacentCommandsTests
     [Fact]
     public void DifferentEasing_DoesNotMerge()
     {
-        var commands = new List<SbCommand> { Move(0, 1000, 0, 100, SbEasing.None), Move(1000, 2000, 100, 200, SbEasing.In) };
+        var commands = new List<SbCommand> { Move(0, 1000, 0, 100), Move(1000, 2000, 100, 200, SbEasing.In) };
 
         var merged = MergeAdjacentCommands.Merge(commands);
 
@@ -85,7 +91,8 @@ public class MergeAdjacentCommandsTests
     [Fact]
     public void FlatRunsAtSameValue_Merge()
     {
-        var commands = new List<SbCommand> { Move(0, 1000, 50, 50), Move(1000, 2000, 50, 50), Move(2000, 3000, 50, 50) };
+        var commands = new List<SbCommand>
+            { Move(0, 1000, 50, 50), Move(1000, 2000, 50, 50), Move(2000, 3000, 50, 50) };
 
         var merged = MergeAdjacentCommands.Merge(commands);
 
@@ -98,7 +105,8 @@ public class MergeAdjacentCommandsTests
     [Fact]
     public void ThreeCollinearSegments_MergeIntoOne()
     {
-        var commands = new List<SbCommand> { Move(0, 500, 0, 50), Move(500, 1000, 50, 100), Move(1000, 1500, 100, 150) };
+        var commands = new List<SbCommand>
+            { Move(0, 500, 0, 50), Move(500, 1000, 50, 100), Move(1000, 1500, 100, 150) };
 
         var merged = MergeAdjacentCommands.Merge(commands);
 
@@ -135,7 +143,7 @@ public class MergeAdjacentCommandsTests
             X = 0,
             Y = 0,
             Asset = new AssetId("a.png"),
-            Commands = [Move(0, 1000, 0, 100), Move(1000, 2000, 100, 200)],
+            Commands = [Move(0, 1000, 0, 100), Move(1000, 2000, 100, 200)]
         };
         doc.Add(sprite);
 

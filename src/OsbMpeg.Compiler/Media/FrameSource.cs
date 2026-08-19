@@ -4,7 +4,7 @@ using System.Threading.Channels;
 using FFMpegCore;
 using FFMpegCore.Pipes;
 
-namespace OsbMpeg.Media;
+namespace OsbMpeg.Compiler.Media;
 
 public sealed record FrameSourceOptions(
     int Width,
@@ -15,11 +15,13 @@ public sealed record FrameSourceOptions(
     string? ExtraInputArgs = null,
     string? ExtraOutputArgs = null);
 
-/// <summary>Streams decoded frames out of ffmpeg without buffering the whole video.
-/// ffmpeg writes raw rgb24 into a named pipe (FFMpegCore's OutputToPipe always uses one on
-/// Windows, not stdout); we read it in a StreamPipeSink writer delegate and hand completed
-/// frames to the caller through a small bounded channel, so ffmpeg naturally blocks (and the
-/// OS pipe buffer provides backpressure) whenever the consumer falls behind.</summary>
+/// <summary>
+///     Streams decoded frames out of ffmpeg without buffering the whole video.
+///     ffmpeg writes raw rgb24 into a named pipe (FFMpegCore's OutputToPipe always uses one on
+///     Windows, not stdout); we read it in a StreamPipeSink writer delegate and hand completed
+///     frames to the caller through a small bounded channel, so ffmpeg naturally blocks (and the
+///     OS pipe buffer provides backpressure) whenever the consumer falls behind.
+/// </summary>
 public static class FrameSource
 {
     public static async IAsyncEnumerable<VideoFrame> ReadFramesAsync(
@@ -28,7 +30,8 @@ public static class FrameSource
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var frameBytes = opts.Width * opts.Height * 3;
-        var channel = Channel.CreateBounded<VideoFrame>(new BoundedChannelOptions(8) { FullMode = BoundedChannelFullMode.Wait });
+        var channel = Channel.CreateBounded<VideoFrame>(new BoundedChannelOptions(8)
+            { FullMode = BoundedChannelFullMode.Wait });
 
         var sink = new StreamPipeSink(async (pipeStream, innerCt) =>
         {
@@ -81,7 +84,7 @@ public static class FrameSource
                     o.WithCustomArgument(outputArgs);
             });
 
-        var processTask = args.ProcessAsynchronously(true);
+        var processTask = args.ProcessAsynchronously();
 
         await foreach (var frame in channel.Reader.ReadAllAsync(ct))
             yield return frame;
