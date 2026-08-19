@@ -56,38 +56,87 @@ public sealed class GroupTransformBaker
         var absEnd = localEndMs + storyboardTimeOffsetMs;
         var first = SampleAt(absStart, baseCenterX, baseCenterY, baseScale);
 
-        if (IsConstant(absStart, absEnd))
-            return ((float)first.X, (float)first.Y, StaticCommands(first, absStart, absEnd));
+        // Position depends on Move AND Scale/VectorScale (an off-pivot tile moves even with
+        // no M command if the group is scaling), so all five must be constant together for
+        // the tile's own position/size to be constant.
+        var positionConstant = ScalarConstant(SbCommandKind.MoveX, _pivotX, absStart, absEnd)
+            && ScalarConstant(SbCommandKind.MoveY, _pivotY, absStart, absEnd)
+            && ScalarConstant(SbCommandKind.Scale, 1f, absStart, absEnd)
+            && ScalarConstant(SbCommandKind.VectorScaleX, 1f, absStart, absEnd)
+            && ScalarConstant(SbCommandKind.VectorScaleY, 1f, absStart, absEnd);
+        var fadeConstant = ScalarConstant(SbCommandKind.Fade, 1f, absStart, absEnd);
+        var colourConstant = ColourConstant(absStart, absEnd);
+        var additiveConstant = FlagConstant(SbCommandKind.Additive, absStart, absEnd);
+
+        var commands = new List<SbCommand>();
+
+        if (positionConstant)
+        {
+            commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = absStart, EndMs = absEnd, Start = (float)first.X, End = (float)first.X });
+            commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = absStart, EndMs = absEnd, Start = (float)first.Y, End = (float)first.Y });
+            commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = absStart, EndMs = absEnd, Start = (float)first.ScaleX, End = (float)first.ScaleX });
+            commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = absStart, EndMs = absEnd, Start = (float)first.ScaleY, End = (float)first.ScaleY });
+        }
+        if (fadeConstant && Math.Abs(first.Alpha - 1f) > 1e-4f)
+            commands.Add(new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = absStart, EndMs = absEnd, Start = first.Alpha, End = first.Alpha });
+        if (colourConstant && first.Colour != SbColor.White)
+            commands.Add(new SbColourCommand { StartMs = absStart, EndMs = absEnd, Start = first.Colour, End = first.Colour });
+        if (additiveConstant && first.Additive)
+            commands.Add(new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = absStart, EndMs = absEnd });
+
+        if (positionConstant && fadeConstant && colourConstant && additiveConstant)
+            return ((float)first.X, (float)first.Y, commands); // fully static — the common case
 
         var samples = new List<(double T, TileSample S)> { (absStart, first) };
         for (var t = absStart + _frameDurationMs; t < absEnd; t += _frameDurationMs)
             samples.Add((t, SampleAt(t, baseCenterX, baseCenterY, baseScale)));
         samples.Add((absEnd, SampleAt(absEnd, baseCenterX, baseCenterY, baseScale)));
 
-        var commands = new List<SbCommand>();
-        var wasAdditive = first.Additive;
-        if (wasAdditive)
-            commands.Add(new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = absStart, EndMs = absStart });
-
         for (var i = 0; i < samples.Count - 1; i++)
         {
             var (t0, a) = samples[i];
             var (t1, b) = samples[i + 1];
-            commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = t0, EndMs = t1, Start = (float)a.X, End = (float)b.X });
-            commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = t0, EndMs = t1, Start = (float)a.Y, End = (float)b.Y });
-            commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = t0, EndMs = t1, Start = (float)a.ScaleX, End = (float)b.ScaleX });
-            commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = t0, EndMs = t1, Start = (float)a.ScaleY, End = (float)b.ScaleY });
-            commands.Add(new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = t0, EndMs = t1, Start = a.Alpha, End = b.Alpha });
-            commands.Add(new SbColourCommand { StartMs = t0, EndMs = t1, Start = a.Colour, End = b.Colour });
-
-            if (b.Additive != wasAdditive)
+            if (!positionConstant)
             {
-                commands.Add(new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = t1, EndMs = t1 });
-                wasAdditive = b.Additive;
+                commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = t0, EndMs = t1, Start = (float)a.X, End = (float)b.X });
+                commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = t0, EndMs = t1, Start = (float)a.Y, End = (float)b.Y });
+                commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = t0, EndMs = t1, Start = (float)a.ScaleX, End = (float)b.ScaleX });
+                commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = t0, EndMs = t1, Start = (float)a.ScaleY, End = (float)b.ScaleY });
             }
+            if (!fadeConstant)
+                commands.Add(new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = t0, EndMs = t1, Start = a.Alpha, End = b.Alpha });
+            if (!colourConstant)
+                commands.Add(new SbColourCommand { StartMs = t0, EndMs = t1, Start = a.Colour, End = b.Colour });
         }
 
+        if (!additiveConstant)
+            commands.AddRange(AdditiveWindows(samples, absEnd));
+
         return ((float)first.X, (float)first.Y, commands);
+    }
+
+    /// <summary>P,A has no persistent "value" — StartMs==EndMs means permanent-from-here,
+    /// otherwise it's active only during [StartMs,EndMs) and reverts after. So a true->false
+    /// transition can't be expressed as a single boundary command (that would just turn it
+    /// back on, permanently); each contiguous true run has to become its own
+    /// [windowStart,windowEnd) span instead.</summary>
+    private static IEnumerable<SbCommand> AdditiveWindows(List<(double T, TileSample S)> samples, double absEnd)
+    {
+        double? openStart = null;
+        for (var i = 0; i < samples.Count; i++)
+        {
+            if (samples[i].S.Additive)
+            {
+                openStart ??= samples[i].T;
+            }
+            else if (openStart is { } start)
+            {
+                yield return new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = start, EndMs = samples[i].T };
+                openStart = null;
+            }
+        }
+        if (openStart is { } tailStart && absEnd > tailStart)
+            yield return new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = tailStart, EndMs = absEnd };
     }
 
     private readonly record struct TileSample(double X, double Y, double ScaleX, double ScaleY, float Alpha, SbColor Colour, bool Additive);
@@ -111,40 +160,12 @@ public sealed class GroupTransformBaker
         return new TileSample(x, y, baseScale * sx, baseScale * sy, alpha, new SbColor(r, g, b), additive);
     }
 
-    private static List<SbCommand> StaticCommands(TileSample s, double start, double end)
-    {
-        var list = new List<SbCommand>
-        {
-            new SbValueCommand { Kind = SbCommandKind.MoveX, StartMs = start, EndMs = end, Start = (float)s.X, End = (float)s.X },
-            new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = start, EndMs = end, Start = (float)s.Y, End = (float)s.Y },
-            new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = start, EndMs = end, Start = (float)s.ScaleX, End = (float)s.ScaleX },
-            new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = start, EndMs = end, Start = (float)s.ScaleY, End = (float)s.ScaleY },
-        };
-        if (Math.Abs(s.Alpha - 1f) > 1e-4f)
-            list.Add(new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = start, EndMs = end, Start = s.Alpha, End = s.Alpha });
-        if (s.Colour != SbColor.White)
-            list.Add(new SbColourCommand { StartMs = start, EndMs = end, Start = s.Colour, End = s.Colour });
-        if (s.Additive)
-            list.Add(new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = start, EndMs = end });
-        return list;
-    }
-
-    /// <summary>True iff every baked property is unchanged across the whole [start,end] span:
+    /// <summary>True iff this one property is unchanged across the whole [start,end] span:
     /// checked at both endpoints and at every relevant command's boundary that falls strictly
     /// inside the span. Since CommandEvaluator is piecewise-linear (piecewise-constant for
     /// flags) between consecutive command boundaries, matching values at every boundary plus
     /// the two endpoints proves the whole span is flat — a plain two-point sample would miss a
     /// command that moves out and back entirely within [start,end].</summary>
-    private bool IsConstant(double start, double end) =>
-        ScalarConstant(SbCommandKind.MoveX, _pivotX, start, end) &&
-        ScalarConstant(SbCommandKind.MoveY, _pivotY, start, end) &&
-        ScalarConstant(SbCommandKind.Scale, 1f, start, end) &&
-        ScalarConstant(SbCommandKind.VectorScaleX, 1f, start, end) &&
-        ScalarConstant(SbCommandKind.VectorScaleY, 1f, start, end) &&
-        ScalarConstant(SbCommandKind.Fade, 1f, start, end) &&
-        ColourConstant(start, end) &&
-        FlagConstant(SbCommandKind.Additive, start, end);
-
     private bool ScalarConstant(SbCommandKind kind, float defaultValue, double start, double end)
     {
         var s = CommandEvaluator.EvaluateScalar(_group, kind, start, defaultValue);
