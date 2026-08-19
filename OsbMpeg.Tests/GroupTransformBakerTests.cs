@@ -55,6 +55,23 @@ public class GroupTransformBakerTests
     }
 
     [Fact]
+    public void AdditiveTrueFalseTrue_EmitsTwoRevertingSpans_NotPermanentOn()
+    {
+        List<SbCommand> group =
+        [
+            new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = 0, EndMs = 500 },
+            new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = 1000, EndMs = 1500 },
+        ];
+        var baker = new GroupTransformBaker(group, pivotX: 320, pivotY: 240, fps: 30);
+
+        var (_, _, commands) = baker.Bake(baseCenterX: 320, baseCenterY: 240, baseScale: 1, localStartMs: 0, localEndMs: 2000, storyboardTimeOffsetMs: 0);
+
+        var flags = commands.OfType<SbFlagCommand>().Where(f => f.Kind == SbCommandKind.Additive).ToList();
+        Assert.Equal(2, flags.Count);
+        Assert.All(flags, f => Assert.True(f.EndMs > f.StartMs, "each window must revert (StartMs==EndMs would mean permanent-on)"));
+    }
+
+    [Fact]
     public void RejectsRotate() =>
         Assert.Throws<NotSupportedException>(() => new GroupTransformBaker(
             [new SbValueCommand { Kind = SbCommandKind.Rotate, StartMs = 0, EndMs = 100, Start = 0, End = 1 }], 0, 0, 30));
