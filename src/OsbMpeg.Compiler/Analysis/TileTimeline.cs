@@ -17,7 +17,27 @@ public sealed record TileRun(int Col, int Row, int PixelX, int PixelY, int Width
 /// <summary>Per-tile state machine driving the conditional-replenishment backbone: as long
 /// as a tile's content hash doesn't change, its current run just extends; a hash change closes
 /// the run and starts a new one. This is the whole compression mechanism — most tiles in most
-/// frames never close a run at all.</summary>
+/// frames never close a run at all.
+///
+/// Global/region motion compensation (the original plan's optimizer phases 12-15) was
+/// evaluated against this design and found structurally unviable, not just untuned — do not
+/// re-attempt without solving both of these:
+/// 1. .osb has no predictive/residual coding — every Sprite is a full self-contained texture.
+///    A motion vector used only to *predict* the fixed-grid tile at (x,y) from frame t-1
+///    buys nothing: the asset bytes still come from ExtractTile at the fixed (x,y) crop of
+///    frame t, which changes every frame under a pan regardless of what the vector says.
+/// 2. Making assets byte-identical across frames requires shifting the *sampling* grid to
+///    track physical scene content — but then the *output* (on-screen) grid must shift by the
+///    same amount to reconstruct correctly, which opens a coverage gap on one edge and an
+///    overhang on the other. Closing that needs variable-size boundary tiles in TileGrid
+///    (today only the trailing row/col is ragged, from a fixed TileSize not dividing the
+///    canvas evenly) — a change to the one component every regression check in this codebase
+///    anchors on. And even with that solved, real motion is sub-tile-per-frame, so holding a
+///    run open across a pan means either per-frame M keyframes on every tile sprite (the exact
+///    command bloat this backbone exists to avoid) or a grid-wide forced run cut every time
+///    accumulated drift crosses one pixel — worse than today's no-compensation baseline at any
+///    real pan speed. TrajectoryFitter/RegionTracker/OcclusionAnalyzer inherit this same
+///    residual-coding gap at region granularity, not just global.</summary>
 public sealed class TileRunTracker
 {
     private readonly TileGrid _grid;
