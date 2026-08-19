@@ -12,7 +12,11 @@ public static class DropNoOpCommands
     public static void Apply(SbDocument doc)
     {
         foreach (var obj in doc.AllObjects)
-            obj.Commands = Drop(obj.Commands);
+        {
+            var dropped = Drop(obj.Commands);
+            obj.Commands.Clear();
+            obj.Commands.AddRange(dropped);
+        }
     }
 
     public static List<SbCommand> Drop(List<SbCommand> commands)

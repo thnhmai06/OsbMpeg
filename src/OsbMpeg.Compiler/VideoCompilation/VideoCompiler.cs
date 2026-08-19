@@ -111,6 +111,7 @@ public static class VideoCompiler
         }
 
         MergeAdjacentCommands.Apply(doc);
+        DropNoOpCommands.Apply(doc);
         OsbWriter.Write(doc, osbOutputPath);
         OsbValidator.Validate(osbOutputPath, doc);
 
