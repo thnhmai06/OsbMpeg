@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using FFMpegCore;
@@ -68,7 +69,12 @@ public static class FrameSource
             })
             .OutputToPipe(sink, o =>
             {
-                o.ForceFormat("rawvideo").ForcePixelFormat("rgb24").WithFramerate(opts.Fps).Resize(opts.Width, opts.Height);
+                // fps filter resamples by timestamp (VFR-safe); "-r" instead forces CFR by
+                // duplicating/dropping frames to hit the rate, which is wrong for anything
+                // that isn't already exactly that rate.
+                var fps = opts.Fps.ToString(CultureInfo.InvariantCulture);
+                o.ForceFormat("rawvideo").ForcePixelFormat("rgb24")
+                    .WithCustomArgument($"-vf \"fps={fps},scale={opts.Width}:{opts.Height}\"");
                 if (opts.Duration is { } duration)
                     o.WithDuration(duration);
                 if (opts.ExtraOutputArgs is { } outputArgs)
