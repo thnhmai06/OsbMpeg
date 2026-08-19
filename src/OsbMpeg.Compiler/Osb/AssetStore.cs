@@ -32,6 +32,14 @@ public enum AssetConsumer : byte
 ///     same quantized bytes (128-bit XXH3, no adversary in this pipeline — see ContentHasher) —
 ///     never trust an existing file under the legacy counter layout below, where the same name can
 ///     legitimately mean different content across runs.
+///     Cache reuse is contingent on --tile-size, --hash-quant, and --colors staying the same
+///     across runs on the same footage: the hash covers the whole tile buffer, so a different
+///     TileSize means every tile is a different byte length and every hash changes — the entire
+///     cache misses, not just the tiles whose visible content actually changed. That's correct
+///     (a 160px tile and a 320px tile really are different assets), just worth stating plainly: a
+///     future auto-tuner that re-picks TileSize per invocation would get zero reuse from this
+///     cache on every run. It must converge to one stable value per piece of content and hold it
+///     across re-compiles, not vary it per invocation, for this cache to pay off at all.
 ///     legacy layout (whole-canvas bench path): sprites/{prefix}{n}.png,
 ///     animations/a{id}/a{id}.png (+ per-frame a{id}{i}.png written by WriteAnimation) — a plain
 ///     per-process counter, one fresh output dir per invocation, never reused across runs.
