@@ -8,23 +8,31 @@ namespace OsbMpeg.Encoder;
 
 /// <summary>The tile-grid conditional-replenishment loop shared by the legacy whole-canvas
 /// EncodePipeline and the .osbv per-AnimationVideo compile path: decode -> track tile runs ->
-/// quadtree merge -> animation-candidate detect -> emit Sprite/Animation objects into a
-/// caller-supplied SbDocument. Pulled out so both callers get byte-identical encode behavior
-/// for the parts they share; what varies per caller — pixel-to-storyboard mapping, target
-/// layer, and a storyboard-timeline offset — is a parameter, not a fork.</summary>
+/// quadtree merge -> animation-candidate detect -> emit Sprite/Animation objects into one or
+/// more caller-supplied sinks. Pulled out so callers get byte-identical encode behavior for
+/// the parts they share; what varies per caller — pixel-to-storyboard mapping, target layer, a
+/// storyboard-timeline offset, and where the resulting objects land — is a list of targets, not
+/// a fork. A single-element target list (every caller except VideoCompiler's shared-decode
+/// path) reproduces the old single-mapping behavior exactly.</summary>
 public static class TileEncodeLoop
 {
+    /// <summary>One consumer of this decode's tile runs. Multiple targets let one decode pass
+    /// serve several AnimationVideo objects that share a source (same file + fps, identical
+    /// [start,end) window) — each gets its own placement/layer/offset/baker, and its own Add
+    /// sink so the caller can buffer per-target and control final document order instead of
+    /// letting emission order be whatever the shared decode's chronological interleaving is.</summary>
+    public sealed record EmitTarget(CanvasMapping Mapping, SbLayer Layer, double StoryboardTimeOffsetMs, GroupTransformBaker? Baker, Action<SbObject> Add);
+
     public sealed record Options(
         string InputPath, int Width, int Height, double Fps, TimeSpan? Start, TimeSpan? Duration,
         int TileSize, int HashQuantLevels, bool RawSnapshot, int TileTolerance, int Gop,
         double MinAnimationUniqueness, bool NoQuadtree, long MaxAssetPixels,
-        SbLayer Layer = SbLayer.Background, double StoryboardTimeOffsetMs = 0,
-        GroupTransformBaker? Baker = null, string? HwAccel = null);
+        IReadOnlyList<EmitTarget> Targets, string? HwAccel = null);
 
     public sealed record Result(int FrameCount, double LastFrameMs);
 
     public static async Task<Result> RunAsync(
-        Options o, SbDocument doc, AssetStore assetStore, CanvasMapping mapping,
+        Options o, AssetStore assetStore,
         Action<int, double>? onProgress, CancellationToken ct)
     {
         var grid = new TileGrid(o.Width, o.Height, o.TileSize);
@@ -44,7 +52,7 @@ public static class TileEncodeLoop
                 var batch = tracker.Advance(frame, lastMs);
                 var merged = o.NoQuadtree ? batch : QuadtreeMerger.Merge(batch, grid, o.MaxAssetPixels);
                 var (sprites, animations) = animationDetector.Process(merged, o.TileSize);
-                Emit(sprites, animations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs, o.Baker);
+                Emit(sprites, animations, assetStore, o.Targets);
 
                 onProgress?.Invoke(frameCount, frame.Pts);
             }
@@ -53,67 +61,79 @@ public static class TileEncodeLoop
         var finalBatch = tracker.Flush(lastMs);
         var finalMerged = o.NoQuadtree ? finalBatch : QuadtreeMerger.Merge(finalBatch, grid, o.MaxAssetPixels);
         var (finalSprites, finalAnimations) = animationDetector.Process(finalMerged, o.TileSize);
-        Emit(finalSprites, finalAnimations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs, o.Baker);
+        Emit(finalSprites, finalAnimations, assetStore, o.Targets);
 
         var (tailSprites, tailAnimations) = animationDetector.FlushAll();
-        Emit(tailSprites, tailAnimations, doc, assetStore, mapping, o.Layer, o.StoryboardTimeOffsetMs, o.Baker);
+        Emit(tailSprites, tailAnimations, assetStore, o.Targets);
 
         return new Result(frameCount, lastMs);
     }
 
-    private static void Emit(List<TileRun> runs, List<AnimationCandidate> candidates, SbDocument doc, AssetStore assetStore, CanvasMapping mapping, SbLayer layer, double timeOffsetMs, GroupTransformBaker? baker)
+    private static void Emit(List<TileRun> runs, List<AnimationCandidate> candidates, AssetStore assetStore, IReadOnlyList<EmitTarget> targets)
     {
         foreach (var run in runs)
         {
+            // Content-hash dedupe is shared across targets on purpose — identical pixels stay
+            // one file regardless of how many targets place a sprite over them.
             var asset = assetStore.GetOrAdd(run.Rgb, run.Width, run.Height, AssetConsumer.Sprite);
 
-            if (baker is null)
+            foreach (var target in targets)
             {
-                var (sbX, sbY) = mapping.PixelToStoryboard(run.PixelX, run.PixelY);
-                var scale = (float)mapping.StoryboardScale;
-                doc.Add(new SbSprite
+                if (target.Baker is null)
                 {
-                    Layer = layer,
-                    Origin = SbOrigin.TopLeft,
-                    X = (float)sbX,
-                    Y = (float)sbY,
-                    Asset = asset,
-                    Commands = [new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = run.StartMs + timeOffsetMs, EndMs = run.EndMs + timeOffsetMs, Start = scale, End = scale }],
-                });
-                continue;
-            }
+                    var (sbX, sbY) = target.Mapping.PixelToStoryboard(run.PixelX, run.PixelY);
+                    var scale = (float)target.Mapping.StoryboardScale;
+                    target.Add(new SbSprite
+                    {
+                        Layer = target.Layer,
+                        Origin = SbOrigin.TopLeft,
+                        X = (float)sbX,
+                        Y = (float)sbY,
+                        Asset = asset,
+                        Commands = [new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = run.StartMs + target.StoryboardTimeOffsetMs, EndMs = run.EndMs + target.StoryboardTimeOffsetMs, Start = scale, End = scale }],
+                    });
+                    continue;
+                }
 
-            var (centerX, centerY) = mapping.PixelToStoryboard(run.PixelX + run.Width / 2.0, run.PixelY + run.Height / 2.0);
-            var (bx, by, commands) = baker.Bake(centerX, centerY, mapping.StoryboardScale, run.StartMs, run.EndMs, timeOffsetMs);
-            doc.Add(new SbSprite { Layer = layer, Origin = SbOrigin.Centre, X = bx, Y = by, Asset = asset, Commands = commands });
+                var (centerX, centerY) = target.Mapping.PixelToStoryboard(run.PixelX + run.Width / 2.0, run.PixelY + run.Height / 2.0);
+                var (bx, by, commands) = target.Baker.Bake(centerX, centerY, target.Mapping.StoryboardScale, run.StartMs, run.EndMs, target.StoryboardTimeOffsetMs);
+                target.Add(new SbSprite { Layer = target.Layer, Origin = SbOrigin.Centre, X = bx, Y = by, Asset = asset, Commands = commands });
+            }
         }
 
         foreach (var c in candidates)
         {
-            var basePath = assetStore.WriteAnimation(c.Frames, c.Width, c.Height);
-
-            if (baker is null)
+            // Unlike sprite assets, Animation frame files aren't content-hash deduped (the
+            // format needs a numbered file series per Animation object — see AssetStore's own
+            // notes on why Sprite and Animation can't share a file) — each target still needs
+            // its own WriteAnimation call, same as independent per-target decode would produce.
+            foreach (var target in targets)
             {
-                var (sbX, sbY) = mapping.PixelToStoryboard(c.PixelX, c.PixelY);
-                var scale = (float)mapping.StoryboardScale;
-                doc.Add(new SbAnimation
-                {
-                    Layer = layer,
-                    Origin = SbOrigin.TopLeft,
-                    X = (float)sbX,
-                    Y = (float)sbY,
-                    BasePath = basePath,
-                    FrameCount = c.Frames.Count,
-                    FrameDelayMs = c.FrameDelayMs,
-                    LoopType = SbLoopType.LoopOnce,
-                    Commands = [new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = c.StartMs + timeOffsetMs, EndMs = c.EndMs + timeOffsetMs, Start = scale, End = scale }],
-                });
-                continue;
-            }
+                var basePath = assetStore.WriteAnimation(c.Frames, c.Width, c.Height);
 
-            var (centerX, centerY) = mapping.PixelToStoryboard(c.PixelX + c.Width / 2.0, c.PixelY + c.Height / 2.0);
-            var (bx, by, commands) = baker.Bake(centerX, centerY, mapping.StoryboardScale, c.StartMs, c.EndMs, timeOffsetMs);
-            doc.Add(new SbAnimation { Layer = layer, Origin = SbOrigin.Centre, X = bx, Y = by, BasePath = basePath, FrameCount = c.Frames.Count, FrameDelayMs = c.FrameDelayMs, LoopType = SbLoopType.LoopOnce, Commands = commands });
+                if (target.Baker is null)
+                {
+                    var (sbX, sbY) = target.Mapping.PixelToStoryboard(c.PixelX, c.PixelY);
+                    var scale = (float)target.Mapping.StoryboardScale;
+                    target.Add(new SbAnimation
+                    {
+                        Layer = target.Layer,
+                        Origin = SbOrigin.TopLeft,
+                        X = (float)sbX,
+                        Y = (float)sbY,
+                        BasePath = basePath,
+                        FrameCount = c.Frames.Count,
+                        FrameDelayMs = c.FrameDelayMs,
+                        LoopType = SbLoopType.LoopOnce,
+                        Commands = [new SbValueCommand { Kind = SbCommandKind.Scale, StartMs = c.StartMs + target.StoryboardTimeOffsetMs, EndMs = c.EndMs + target.StoryboardTimeOffsetMs, Start = scale, End = scale }],
+                    });
+                    continue;
+                }
+
+                var (centerX, centerY) = target.Mapping.PixelToStoryboard(c.PixelX + c.Width / 2.0, c.PixelY + c.Height / 2.0);
+                var (bx, by, commands) = target.Baker.Bake(centerX, centerY, target.Mapping.StoryboardScale, c.StartMs, c.EndMs, target.StoryboardTimeOffsetMs);
+                target.Add(new SbAnimation { Layer = target.Layer, Origin = SbOrigin.Centre, X = bx, Y = by, BasePath = basePath, FrameCount = c.Frames.Count, FrameDelayMs = c.FrameDelayMs, LoopType = SbLoopType.LoopOnce, Commands = commands });
+            }
         }
     }
 }

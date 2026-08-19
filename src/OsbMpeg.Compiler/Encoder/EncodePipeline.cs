@@ -35,9 +35,10 @@ public sealed class EncodePipeline(EncodeOptions options)
         var loopOptions = new TileEncodeLoop.Options(
             options.InputPath, width, height, fps, options.Start, options.Duration,
             options.TileSize, options.HashQuantLevels, options.RawSnapshot, options.TileTolerance, options.Gop,
-            options.MinAnimationUniqueness, options.NoQuadtree, options.MaxAssetPixels);
+            options.MinAnimationUniqueness, options.NoQuadtree, options.MaxAssetPixels,
+            Targets: [new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add)]);
 
-        var result = await TileEncodeLoop.RunAsync(loopOptions, doc, assetStore, mapping,
+        var result = await TileEncodeLoop.RunAsync(loopOptions, assetStore,
             (frame, pts) => onProgress?.Invoke(new EncodeProgress(frame, estimatedTotalFrames, pts, doc.SpriteCount, doc.CommandCount, assetStore.FileCount, assetStore.TotalBytes)),
             ct);
         var frameCount = result.FrameCount;
