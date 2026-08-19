@@ -72,14 +72,35 @@ public class GroupTransformBakerTests
     }
 
     [Fact]
-    public void RejectsRotate() =>
-        Assert.Throws<NotSupportedException>(() => new GroupTransformBaker(
-            [new SbValueCommand { Kind = SbCommandKind.Rotate, StartMs = 0, EndMs = 100, Start = 0, End = 1 }], 0, 0, 30));
+    public void ConstantQuarterTurn_RotatesOffsetIntoCorrectQuadrant()
+    {
+        // theta = pi/2 permanently (StartMs==EndMs). An offset tile 100 units right of the
+        // pivot (baseCenterX=420 vs pivotX=320) must swing to 100 units BELOW the pivot,
+        // matching Compositor's [cos -sin; sin cos] convention: rotX = offX*cos - offY*sin,
+        // rotY = offX*sin + offY*cos; with offX=100, offY=0, theta=pi/2 -> (0, 100).
+        List<SbCommand> group = [new SbValueCommand { Kind = SbCommandKind.Rotate, StartMs = 0, EndMs = 0, Start = (float)(Math.PI / 2), End = (float)(Math.PI / 2) }];
+        var baker = new GroupTransformBaker(group, pivotX: 320, pivotY: 240, fps: 30);
+
+        var (x, y, commands) = baker.Bake(baseCenterX: 420, baseCenterY: 240, baseScale: 1, localStartMs: 1000, localEndMs: 2000, storyboardTimeOffsetMs: 0);
+
+        Assert.Equal(320, x, precision: 3);
+        Assert.Equal(340, y, precision: 3); // pivotY(240) + rotY(100)
+        Assert.Contains(commands, c => c is SbValueCommand { Kind: SbCommandKind.Rotate });
+    }
 
     [Fact]
-    public void RejectsFlip() =>
-        Assert.Throws<NotSupportedException>(() => new GroupTransformBaker(
-            [new SbFlagCommand { Kind = SbCommandKind.FlipH, StartMs = 0, EndMs = 0 }], 0, 0, 30));
+    public void ConstantFlipH_MirrorsOffsetAndSetsFlag()
+    {
+        List<SbCommand> group = [new SbFlagCommand { Kind = SbCommandKind.FlipH, StartMs = 0, EndMs = 0 }]; // permanent
+        var baker = new GroupTransformBaker(group, pivotX: 320, pivotY: 240, fps: 30);
+
+        // offset tile 100 units right of the pivot must mirror to 100 units LEFT of it.
+        var (x, y, commands) = baker.Bake(baseCenterX: 420, baseCenterY: 240, baseScale: 1, localStartMs: 1000, localEndMs: 2000, storyboardTimeOffsetMs: 0);
+
+        Assert.Equal(220, x, precision: 3);
+        Assert.Equal(240, y, precision: 3);
+        Assert.Contains(commands, c => c is SbFlagCommand { Kind: SbCommandKind.FlipH });
+    }
 
     [Fact]
     public void RejectsLoop() =>

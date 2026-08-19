@@ -3,18 +3,24 @@ using OsbMpeg.Render;
 
 namespace OsbMpeg.VideoCompilation;
 
-/// <summary>Bakes an AnimationVideo group's script into per-tile M/V/F/C/P,A commands — .osb
+/// <summary>Bakes an AnimationVideo group's script into per-tile M/V/R/F/C/P commands — .osb
 /// has no real group-transform object, so every tile sprite/animation the video decomposes
 /// into must carry its own copy of the group's motion.
 ///
 /// V1 scope: Move (M/MX/MY, absolute — matches CommandEvaluator's own default-to-declared-
-/// position convention), Scale/VectorScale, Fade, Colour, Additive. Rotation and flip
-/// (H/V) are rejected outright: rotation needs each tile's position AND its own R value to
-/// track the group angle (a per-tile rigid-body decomposition), and flip needs each tile's
-/// offset mirrored about the pivot plus its own P,H/V toggled to match — both correct but not
-/// implemented yet, so refusing beats silently ignoring the script. Loop is rejected too:
-/// CommandEvaluator doesn't walk into loop children for property evaluation, so baking one
-/// would silently play back as if the loop's contents didn't exist.
+/// position convention), Scale/VectorScale, Rotate, Fade, Colour, Additive, flip (P,H/P,V).
+/// Loop is rejected: CommandEvaluator doesn't walk into loop children for property
+/// evaluation, so baking one would silently play back as if the loop's contents didn't exist.
+///
+/// Rotation and flip are a per-tile rigid-body decomposition, not just a copied value: a
+/// tile's CENTER has to move along the same arc/mirror the group's whole rotation/flip
+/// traces, and the tile ALSO gets its own matching R / P,H / P,V so its own content is
+/// oriented correctly — same composition Compositor.Blit already applies to a single object
+/// (flip sign folded into scale, applied before the rotation matrix), reused here for
+/// consistency: offset = (baseCenter - pivot) * scale * (flipped ? -1 : 1), then rotated by
+/// R(theta) using the identical [cos -sin; sin cos] matrix Compositor uses for pixel sampling.
+/// Known gap: two adjacent tiles round their own baked X/Y independently, so a rotated seam
+/// between them isn't guaranteed sub-pixel-tight (untested — no pixel-level seam check yet).
 ///
 /// Correctness over compactness: a tile run can span many frames while the group is still
 /// moving, so a run's baked transform is either ONE static command set (when the group's
@@ -22,8 +28,8 @@ namespace OsbMpeg.VideoCompilation;
 /// video that's simply placed and faded once) or one command set PER SAMPLED FRAME (when it
 /// does) — sampled at the same fps the tile analysis already runs at, so this introduces no
 /// error beyond the quantization the codec already accepts everywhere else. No polyline/chord-
-/// error approximation is needed: that trick exists to compact a rotation into few commands,
-/// and per-frame sampling makes the question moot for what's implemented here.</summary>
+/// error approximation is needed for rotation: that trick exists to compact a rotation into
+/// few commands, and per-frame sampling makes the question moot.</summary>
 public sealed class GroupTransformBaker
 {
     private readonly List<SbCommand> _group;
@@ -35,10 +41,6 @@ public sealed class GroupTransformBaker
     {
         if (groupCommands.Any(c => c is SbLoop))
             throw new NotSupportedException("AnimationVideo commands contain a Loop (\"L\") — group-transform baking doesn't evaluate loop children yet (V1). Flatten it or wait for baking support.");
-        if (groupCommands.Any(c => c is SbValueCommand { Kind: SbCommandKind.Rotate }))
-            throw new NotSupportedException("AnimationVideo commands contain Rotate (\"R\") — rotation baking isn't implemented yet (V1).");
-        if (groupCommands.Any(c => c is SbFlagCommand { Kind: SbCommandKind.FlipH or SbCommandKind.FlipV }))
-            throw new NotSupportedException("AnimationVideo commands contain a flip (\"P,H\"/\"P,V\") — flip-mirror baking isn't implemented yet (V1).");
 
         _group = groupCommands;
         _pivotX = pivotX;
@@ -56,14 +58,18 @@ public sealed class GroupTransformBaker
         var absEnd = localEndMs + storyboardTimeOffsetMs;
         var first = SampleAt(absStart, baseCenterX, baseCenterY, baseScale);
 
-        // Position depends on Move AND Scale/VectorScale (an off-pivot tile moves even with
-        // no M command if the group is scaling), so all five must be constant together for
-        // the tile's own position/size to be constant.
+        // Position depends on Move, Scale/VectorScale, Rotate, AND flip (an off-pivot tile
+        // moves even with no M command if the group rotates, scales, or mirrors), so all of
+        // them must be constant together for the tile's own position/size/orientation to be
+        // constant.
         var positionConstant = ScalarConstant(SbCommandKind.MoveX, _pivotX, absStart, absEnd)
             && ScalarConstant(SbCommandKind.MoveY, _pivotY, absStart, absEnd)
             && ScalarConstant(SbCommandKind.Scale, 1f, absStart, absEnd)
             && ScalarConstant(SbCommandKind.VectorScaleX, 1f, absStart, absEnd)
-            && ScalarConstant(SbCommandKind.VectorScaleY, 1f, absStart, absEnd);
+            && ScalarConstant(SbCommandKind.VectorScaleY, 1f, absStart, absEnd)
+            && ScalarConstant(SbCommandKind.Rotate, 0f, absStart, absEnd)
+            && FlagConstant(SbCommandKind.FlipH, absStart, absEnd)
+            && FlagConstant(SbCommandKind.FlipV, absStart, absEnd);
         var fadeConstant = ScalarConstant(SbCommandKind.Fade, 1f, absStart, absEnd);
         var colourConstant = ColourConstant(absStart, absEnd);
         var additiveConstant = FlagConstant(SbCommandKind.Additive, absStart, absEnd);
@@ -76,6 +82,12 @@ public sealed class GroupTransformBaker
             commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = absStart, EndMs = absEnd, Start = (float)first.Y, End = (float)first.Y });
             commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = absStart, EndMs = absEnd, Start = (float)first.ScaleX, End = (float)first.ScaleX });
             commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = absStart, EndMs = absEnd, Start = (float)first.ScaleY, End = (float)first.ScaleY });
+            if (Math.Abs(first.Rotation) > 1e-6)
+                commands.Add(new SbValueCommand { Kind = SbCommandKind.Rotate, StartMs = absStart, EndMs = absEnd, Start = (float)first.Rotation, End = (float)first.Rotation });
+            if (first.FlipH)
+                commands.Add(new SbFlagCommand { Kind = SbCommandKind.FlipH, StartMs = absStart, EndMs = absEnd });
+            if (first.FlipV)
+                commands.Add(new SbFlagCommand { Kind = SbCommandKind.FlipV, StartMs = absStart, EndMs = absEnd });
         }
         if (fadeConstant && Math.Abs(first.Alpha - 1f) > 1e-4f)
             commands.Add(new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = absStart, EndMs = absEnd, Start = first.Alpha, End = first.Alpha });
@@ -102,6 +114,7 @@ public sealed class GroupTransformBaker
                 commands.Add(new SbValueCommand { Kind = SbCommandKind.MoveY, StartMs = t0, EndMs = t1, Start = (float)a.Y, End = (float)b.Y });
                 commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleX, StartMs = t0, EndMs = t1, Start = (float)a.ScaleX, End = (float)b.ScaleX });
                 commands.Add(new SbValueCommand { Kind = SbCommandKind.VectorScaleY, StartMs = t0, EndMs = t1, Start = (float)a.ScaleY, End = (float)b.ScaleY });
+                commands.Add(new SbValueCommand { Kind = SbCommandKind.Rotate, StartMs = t0, EndMs = t1, Start = (float)a.Rotation, End = (float)b.Rotation });
             }
             if (!fadeConstant)
                 commands.Add(new SbValueCommand { Kind = SbCommandKind.Fade, StartMs = t0, EndMs = t1, Start = a.Alpha, End = b.Alpha });
@@ -110,36 +123,47 @@ public sealed class GroupTransformBaker
         }
 
         if (!additiveConstant)
-            commands.AddRange(AdditiveWindows(samples, absEnd));
+            commands.AddRange(FlagWindows(SbCommandKind.Additive, samples, absEnd, s => s.Additive));
+        // FlipH/FlipV are bundled into positionConstant above, so !positionConstant doesn't by
+        // itself mean they changed — check independently so a tile whose flip stays fixed
+        // while only e.g. Move animates still gets one static P,H/V instead of a redundant window.
+        if (!positionConstant)
+        {
+            if (FlagConstant(SbCommandKind.FlipH, absStart, absEnd)) { if (first.FlipH) commands.Add(new SbFlagCommand { Kind = SbCommandKind.FlipH, StartMs = absStart, EndMs = absEnd }); }
+            else commands.AddRange(FlagWindows(SbCommandKind.FlipH, samples, absEnd, s => s.FlipH));
+
+            if (FlagConstant(SbCommandKind.FlipV, absStart, absEnd)) { if (first.FlipV) commands.Add(new SbFlagCommand { Kind = SbCommandKind.FlipV, StartMs = absStart, EndMs = absEnd }); }
+            else commands.AddRange(FlagWindows(SbCommandKind.FlipV, samples, absEnd, s => s.FlipV));
+        }
 
         return ((float)first.X, (float)first.Y, commands);
     }
 
-    /// <summary>P,A has no persistent "value" — StartMs==EndMs means permanent-from-here,
-    /// otherwise it's active only during [StartMs,EndMs) and reverts after. So a true->false
-    /// transition can't be expressed as a single boundary command (that would just turn it
+    /// <summary>P (flag) commands have no persistent "value" — StartMs==EndMs means
+    /// permanent-from-here, otherwise active only during [StartMs,EndMs) and reverting after.
+    /// So a true->false transition can't be a single boundary command (that would just turn it
     /// back on, permanently); each contiguous true run has to become its own
     /// [windowStart,windowEnd) span instead.</summary>
-    private static IEnumerable<SbCommand> AdditiveWindows(List<(double T, TileSample S)> samples, double absEnd)
+    private static IEnumerable<SbCommand> FlagWindows(SbCommandKind kind, List<(double T, TileSample S)> samples, double absEnd, Func<TileSample, bool> select)
     {
         double? openStart = null;
         for (var i = 0; i < samples.Count; i++)
         {
-            if (samples[i].S.Additive)
+            if (select(samples[i].S))
             {
                 openStart ??= samples[i].T;
             }
             else if (openStart is { } start)
             {
-                yield return new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = start, EndMs = samples[i].T };
+                yield return new SbFlagCommand { Kind = kind, StartMs = start, EndMs = samples[i].T };
                 openStart = null;
             }
         }
         if (openStart is { } tailStart && absEnd > tailStart)
-            yield return new SbFlagCommand { Kind = SbCommandKind.Additive, StartMs = tailStart, EndMs = absEnd };
+            yield return new SbFlagCommand { Kind = kind, StartMs = tailStart, EndMs = absEnd };
     }
 
-    private readonly record struct TileSample(double X, double Y, double ScaleX, double ScaleY, float Alpha, SbColor Colour, bool Additive);
+    private readonly record struct TileSample(double X, double Y, double ScaleX, double ScaleY, double Rotation, bool FlipH, bool FlipV, float Alpha, SbColor Colour, bool Additive);
 
     private TileSample SampleAt(double absT, double baseCenterX, double baseCenterY, double baseScale)
     {
@@ -150,14 +174,27 @@ public sealed class GroupTransformBaker
         var vsy = CommandEvaluator.EvaluateScalar(_group, SbCommandKind.VectorScaleY, absT, 1f);
         var sx = scale * vsx;
         var sy = scale * vsy;
+        var flipH = CommandEvaluator.EvaluateFlag(_group, SbCommandKind.FlipH, absT);
+        var flipV = CommandEvaluator.EvaluateFlag(_group, SbCommandKind.FlipV, absT);
+        var theta = (double)CommandEvaluator.EvaluateScalar(_group, SbCommandKind.Rotate, absT, 0f);
 
-        var x = moveX + (baseCenterX - _pivotX) * sx;
-        var y = moveY + (baseCenterY - _pivotY) * sy;
+        // Same composition Compositor.Blit uses for a single object's own pixel sampling:
+        // flip folded into scale sign first (in the group's unrotated local frame), then the
+        // [cos -sin; sin cos] rotation matrix.
+        var offX = (baseCenterX - _pivotX) * sx * (flipH ? -1 : 1);
+        var offY = (baseCenterY - _pivotY) * sy * (flipV ? -1 : 1);
+        var cos = Math.Cos(theta);
+        var sin = Math.Sin(theta);
+        var rotX = offX * cos - offY * sin;
+        var rotY = offX * sin + offY * cos;
+
+        var x = moveX + rotX;
+        var y = moveY + rotY;
         var alpha = CommandEvaluator.Flicker(CommandEvaluator.EvaluateScalar(_group, SbCommandKind.Fade, absT, 1f));
         var (r, g, b) = CommandEvaluator.EvaluateColour(_group, absT);
         var additive = CommandEvaluator.EvaluateFlag(_group, SbCommandKind.Additive, absT);
 
-        return new TileSample(x, y, baseScale * sx, baseScale * sy, alpha, new SbColor(r, g, b), additive);
+        return new TileSample(x, y, baseScale * sx, baseScale * sy, theta, flipH, flipV, alpha, new SbColor(r, g, b), additive);
     }
 
     /// <summary>True iff this one property is unchanged across the whole [start,end] span:

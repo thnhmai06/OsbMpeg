@@ -12,7 +12,7 @@ public sealed record VideoCompileResult(int SpriteCount, int AnimationCount, int
 /// objects pass straight through to IR. Each AnimationVideo runs the same tile-grid encode as
 /// the old whole-canvas CLI (TileEncodeLoop), auto-cover-placed at its declared (X,Y); if it
 /// has commands, a GroupTransformBaker bakes them into every tile — see that class for what's
-/// covered (Move/Scale/Fade/Colour/Additive) versus rejected (Rotate, flip, Loop).
+/// covered (Move/Scale/Rotate/Fade/Colour/Additive/flip) versus rejected (Loop).
 ///
 /// Decode is not shared across AnimationVideo objects that point at the same source (that's
 /// the P6 optimization VideoSourcePlanner exists to eventually drive) — each member gets its
