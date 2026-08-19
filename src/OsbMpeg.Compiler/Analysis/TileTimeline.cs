@@ -37,7 +37,17 @@ public sealed record TileRun(int Col, int Row, int PixelX, int PixelY, int Width
 ///    command bloat this backbone exists to avoid) or a grid-wide forced run cut every time
 ///    accumulated drift crosses one pixel — worse than today's no-compensation baseline at any
 ///    real pan speed. TrajectoryFitter/RegionTracker/OcclusionAnalyzer inherit this same
-///    residual-coding gap at region granularity, not just global.</summary>
+///    residual-coding gap at region granularity, not just global.
+///
+/// The obvious follow-up — fake residual coding via a second Sprite additively composited
+/// (P,A) on top of a base — was also evaluated and is dead for a sharper reason: it's not
+/// representable, not just uneconomical. Per osu-wiki's Storyboard/Scripting/Commands, the P
+/// command's only parameters are H (flip), V (flip), A (additive blend); there is no
+/// subtractive/reverse blend exposed, and C (colour) is a single per-object multiply tint, not
+/// a per-pixel channel. A real residual is signed; additive-only compositing on 0-255 texture
+/// bytes can brighten but never darken, so there's no way to cancel a +128 bias trick either.
+/// This collapses to "brighten-only correction," not residual coding — don't spend a
+/// dedupe-rate measurement on it, the format-level blocker decides it first.</summary>
 public sealed class TileRunTracker
 {
     private readonly TileGrid _grid;
