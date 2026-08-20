@@ -23,7 +23,7 @@ public class OsbWriterShorthandTests
         try
         {
             OsbWriter.Write(doc, path);
-            return File.ReadAllLines(path).Where(l => l.StartsWith(' ')).Select(l => l.TrimStart()).ToArray();
+            return [.. File.ReadAllLines(path).Where(l => l.StartsWith(' ')).Select(l => l.TrimStart())];
         }
         finally
         {

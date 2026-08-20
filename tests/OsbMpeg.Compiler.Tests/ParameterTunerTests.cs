@@ -16,6 +16,15 @@ public class ParameterTunerTests
     {
         var probeCount = 0;
 
+        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
+
+        Assert.Equal(new TunedParameters(64, 32, 8, 0), tuned);
+        // 3+3+3+4=13 candidates minus 3 seeded (each axis's "unchanged" candidate reuses the
+        // previous axis's own winning result instead of re-probing) minus baseline folded into
+        // the TileSize axis's own batch (its 64 candidate IS the baseline tuple) = 10.
+        Assert.Equal(10, probeCount);
+        return;
+
         Task<(ParameterTuner.ProbeResult, ParameterTuner.ProbeResult)> Probe(int tileSize, int hashQuant,
             int tolerance, int colors)
         {
@@ -26,19 +35,16 @@ public class ParameterTunerTests
                 ? new ParameterTuner.ProbeResult(BaselinePsnr, 100_000, 500)
                 : new ParameterTuner.ProbeResult(BaselinePsnr - 5, 200_000, 500));
         }
-
-        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
-
-        Assert.Equal(new TunedParameters(64, 32, 8, 0), tuned);
-        // 3+3+3+4=13 candidates minus 3 seeded (each axis's "unchanged" candidate reuses the
-        // previous axis's own winning result instead of re-probing) minus baseline folded into
-        // the TileSize axis's own batch (its 64 candidate IS the baseline tuple) = 10.
-        Assert.Equal(10, probeCount);
     }
 
     [Fact]
     public async Task PicksCheaperCandidate_WhenItStaysWithinSlackOfFloor()
     {
+        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
+
+        Assert.Equal(16, tuned.Colors);
+        return;
+
         Task<(ParameterTuner.ProbeResult, ParameterTuner.ProbeResult)> Probe(int tileSize, int hashQuant,
             int tolerance, int colors)
         {
@@ -51,10 +57,6 @@ public class ParameterTunerTests
                 ? new ParameterTuner.ProbeResult(BaselinePsnr, 100_000, 500)
                 : new ParameterTuner.ProbeResult(BaselinePsnr - 5, 200_000, 500));
         }
-
-        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
-
-        Assert.Equal(16, tuned.Colors);
     }
 
     [Fact]
@@ -69,6 +71,12 @@ public class ParameterTunerTests
         // uniformly worse doesn't wrongly override the still-valid seeded/unchanged value.
         var probeCount = 0;
 
+        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
+
+        Assert.Equal(new TunedParameters(64, 32, 8, 0), tuned);
+        Assert.Equal(10, probeCount); // no extra re-probe of the seeded (64,32,8,0) tuple anywhere
+        return;
+
         Task<(ParameterTuner.ProbeResult, ParameterTuner.ProbeResult)> Probe(int tileSize, int hashQuant,
             int tolerance, int colors)
         {
@@ -78,16 +86,16 @@ public class ParameterTunerTests
                 ? new ParameterTuner.ProbeResult(BaselinePsnr, 100_000, 500)
                 : new ParameterTuner.ProbeResult(BaselinePsnr - 50, 200_000, 500));
         }
-
-        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
-
-        Assert.Equal(new TunedParameters(64, 32, 8, 0), tuned);
-        Assert.Equal(10, probeCount); // no extra re-probe of the seeded (64,32,8,0) tuple anywhere
     }
 
     [Fact]
     public async Task RejectsCandidate_WhenItOverfitsTrain_AndEvalPsnrMisses_TheFloor()
     {
+        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
+
+        Assert.Equal(0, tuned.Colors); // stayed at baseline -- the overfit candidate got rejected
+        return;
+
         // Colors=16 looks like a clean win on train (cheap, within slack) -- but its eval PSNR
         // craters well below the floor, the exact "looked great on the sample it was tuned
         // against, falls apart on unseen material" case the train/eval split exists to catch.
@@ -110,10 +118,6 @@ public class ParameterTunerTests
                 new ParameterTuner.ProbeResult(BaselinePsnr - 5, 200_000, 500),
                 new ParameterTuner.ProbeResult(BaselinePsnr - 5, 200_000, 500)));
         }
-
-        var tuned = await ParameterTuner.TuneCoreAsync(Probe, "test", null);
-
-        Assert.Equal(0, tuned.Colors); // stayed at baseline -- the overfit candidate got rejected
     }
 
     [Fact]

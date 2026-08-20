@@ -87,7 +87,7 @@ public static class ScenePrePass
         var tracker = new TileRunTracker(grid, BaselineHashQuantLevels, true, BaselineTileTolerance);
         var frameOpts = new FrameSourceOptions(width, height, fps,
             TimeSpan.FromMilliseconds(windowStartMs), TimeSpan.FromMilliseconds(windowEndMs - windowStartMs),
-            hwAccel is { } hw ? $"-hwaccel {hw}" : null);
+            hwAccel != null ? $"-hwaccel {hwAccel}" : null);
 
         var samples = new List<(double Ms, int ClosedCount)>();
         await foreach (var frame in FrameSource.ReadFramesAsync(inputPath, frameOpts, ct))

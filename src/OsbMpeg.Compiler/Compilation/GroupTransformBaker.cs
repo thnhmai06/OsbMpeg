@@ -53,10 +53,10 @@ public sealed class GroupTransformBaker
     public GroupTransformBaker(List<SbCommand> groupCommands, float pivotX, float pivotY, double fps)
     {
         var flattened = LoopFlattener.Flatten(groupCommands);
-        _triggers = flattened.OfType<SbTrigger>().ToList();
+        _triggers = [.. flattened.OfType<SbTrigger>()];
         foreach (var trigger in _triggers)
             ValidateTriggerChildren(trigger);
-        _group = flattened.Where(c => c is not SbTrigger).ToList();
+        _group = [.. flattened.Where(c => c is not SbTrigger)];
 
         _pivotX = pivotX;
         _pivotY = pivotY;

@@ -134,7 +134,7 @@ public sealed class TileRunTracker
 
             _currentHash[index] = hash;
             _runStartMs[index] = frameMs;
-            _runSnapshot[index] = (_canonicalSnapshot ? canonical : (ReadOnlySpan<byte>)tile).ToArray();
+            _runSnapshot[index] = [.. _canonicalSnapshot ? canonical : (ReadOnlySpan<byte>)tile];
         }
 
         return closed;

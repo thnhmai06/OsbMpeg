@@ -16,13 +16,6 @@ public class FrameSourceTests
         // ThrowsAnyAsync pass, for the wrong reason, if the underlying hang regressed.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
 
-        async Task ReadAll()
-        {
-            await foreach (var frame in FrameSource.ReadFramesAsync("nonexistent.mp4",
-                               new FrameSourceOptions(64, 64, 30), cts.Token))
-                frame.Dispose();
-        }
-
         var sw = Stopwatch.StartNew();
         var ex = await Assert.ThrowsAnyAsync<Exception>(ReadAll);
         sw.Stop();
@@ -34,5 +27,13 @@ public class FrameSourceTests
         Assert.IsNotType<OperationCanceledException>(ex);
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(75),
             $"expected ffmpeg's own failure to surface in well under 75s, took {sw.Elapsed}");
+        return;
+
+        async Task ReadAll()
+        {
+            await foreach (var frame in FrameSource.ReadFramesAsync("nonexistent.mp4",
+                               new FrameSourceOptions(64, 64, 30), cts.Token))
+                frame.Dispose();
+        }
     }
 }
