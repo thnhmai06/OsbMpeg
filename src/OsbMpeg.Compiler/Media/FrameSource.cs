@@ -45,7 +45,10 @@ public sealed record FrameSourceOptions(
 /// </summary>
 public static class FrameSource
 {
-    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
+    // 60s, not 20s: SceneCache now tunes multiple scenes concurrently, so several ffmpeg
+    // startups can be competing for CPU/disk at once. A genuinely broken input still exits
+    // in ~1.3s (see above), so this only slows down that error case -- it doesn't mask it.
+    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(60);
 
     public static async IAsyncEnumerable<VideoFrame> ReadFramesAsync(
         string inputPath,

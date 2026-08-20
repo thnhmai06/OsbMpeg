@@ -1,3 +1,4 @@
+using OsbMpeg.Compiler.Osb;
 using OsbMpeg.Parsers.Ir;
 using OsbMpeg.Parsers.Render;
 using SixLabors.ImageSharp;
@@ -20,12 +21,22 @@ public sealed class SoftwareStoryboardRenderer
 {
     private readonly Dictionary<AssetId, SpriteFrame> _assetCache = new();
     private readonly string _assetRootDir;
+    private readonly AssetStore? _assetStore;
     private readonly CanvasMapping _mapping;
     private readonly List<(SbObject Obj, double Start, double End)> _renderList;
 
-    public SoftwareStoryboardRenderer(SbDocument doc, string assetRootDir, int width, int height)
+    /// <param name="assetStore">
+    ///     Optional — when the SbDocument's own assets were written via an in-memory AssetStore
+    ///     (see AssetStore.cs's <c>inMemory</c> doc comment; ParameterTuner.ProbeAsync's only
+    ///     current caller), pass it here so LoadAsset reads those bytes back directly instead of
+    ///     opening a file at <paramref name="assetRootDir" /> that was never written. Every other
+    ///     caller (DecodeCommand, BenchCommand) reads real, disk-backed assets and leaves this null.
+    /// </param>
+    public SoftwareStoryboardRenderer(SbDocument doc, string assetRootDir, int width, int height,
+        AssetStore? assetStore = null)
     {
         _assetRootDir = assetRootDir;
+        _assetStore = assetStore;
         Width = width;
         Height = height;
         _mapping = new CanvasMapping(width, height);
@@ -116,8 +127,9 @@ public sealed class SoftwareStoryboardRenderer
         if (_assetCache.TryGetValue(id, out var cached))
             return cached;
 
-        var path = Path.Combine(_assetRootDir, id.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-        using var image = Image.Load<Rgb24>(path);
+        using var image = _assetStore?.GetMemoryBytes(id) is { } bytes
+            ? Image.Load<Rgb24>(bytes)
+            : Image.Load<Rgb24>(Path.Combine(_assetRootDir, id.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
         var buffer = new byte[image.Width * image.Height * 3];
         image.CopyPixelDataTo(buffer);
         var frame = new SpriteFrame(buffer, image.Width, image.Height);

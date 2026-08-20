@@ -71,6 +71,8 @@ public sealed class AssetStore
     private readonly PngCompressionLevel _compressionLevel;
     private readonly Dictionary<(AssetConsumer Consumer, UInt128 Hash), AssetId> _dedupe = new();
     private readonly bool _hexNaming;
+    private readonly bool _inMemory;
+    private readonly Dictionary<string, byte[]>? _memoryFiles;
     private readonly string _namePrefix;
     private readonly string _relativeDir;
     private int _animationCounter;
@@ -82,16 +84,40 @@ public sealed class AssetStore
     ///     legacy sprites/{prefix}{n}.png / animations/a{id}/a{id}{n}.png layout the old
     ///     whole-canvas CLI still writes and validates against.
     /// </param>
+    /// <param name="inMemory">
+    ///     ParameterTuner.ProbeAsync only: every probe writes a fresh, throwaway asset set purely
+    ///     to learn its total byte size and to let SoftwareStoryboardRenderer read the same
+    ///     quantized pixels back for a PSNR comparison — the disk copy itself is never wanted, and
+    ///     under Windows a fresh small file per changed tile (measured: real-time AV scanning is
+    ///     the likely cause, not the PNG encode itself) was ~75% of every probe's wall time. PNG
+    ///     encode/quantize still happens (needed for accurate byte size and for the same lossy
+    ///     round-trip TotalBytes/PSNR depend on) — only the filesystem write/stat/read is skipped,
+    ///     via GetMemoryBytes below. Never set true for the real .osbv compile or legacy whole-canvas
+    ///     paths — those assets are the actual deliverable and must land on disk.
+    /// </param>
     public AssetStore(string absoluteAssetDir, string relativeDirInOsb, string namePrefix,
-        int pngCompressionLevel = 6, bool hexNaming = false)
+        int pngCompressionLevel = 6, bool hexNaming = false, bool inMemory = false)
     {
         _absoluteDir = absoluteAssetDir;
         _relativeDir = relativeDirInOsb;
         _namePrefix = namePrefix;
         _compressionLevel = (PngCompressionLevel)Math.Clamp(pngCompressionLevel, 0, 9);
         _hexNaming = hexNaming;
-        Directory.CreateDirectory(absoluteAssetDir);
+        _inMemory = inMemory;
+        if (_inMemory)
+            _memoryFiles = new Dictionary<string, byte[]>();
+        else
+            Directory.CreateDirectory(absoluteAssetDir);
     }
+
+    /// <summary>
+    ///     Reads back bytes written under <see cref="_inMemory" /> mode — <paramref name="id" />'s
+    ///     RelativePath is the exact key SavePng stored them under. Returns null when this store
+    ///     isn't in-memory (callers fall back to reading the real file at AssetId's path) or the id
+    ///     is unknown to this store.
+    /// </summary>
+    internal byte[]? GetMemoryBytes(AssetId id) =>
+        _memoryFiles is null ? null : _memoryFiles.GetValueOrDefault(id.RelativePath);
 
     public int FileCount { get; private set; }
     public int AnimationFrameCount { get; private set; }
@@ -177,6 +203,26 @@ public sealed class AssetStore
     /// </param>
     private AssetId SavePng(string relativePath, ReadOnlySpan<byte> rgb, int width, int height, int colors)
     {
+        var id = new AssetId($"{_relativeDir}/{relativePath}");
+
+        if (_inMemory)
+        {
+            // No dedupe-by-existing-file check here (unlike the disk branch below) -- every probe
+            // gets a brand-new AssetStore, so there's never a prior write to skip; encode always
+            // runs. That's fine, this mode trades disk I/O away, not the encode itself.
+            using var image = Image.LoadPixelData<Rgb24>(rgb, width, height);
+            if (colors > 0)
+                image.Mutate(ctx => ctx.Quantize(new OctreeQuantizer(new QuantizerOptions { MaxColors = colors })));
+            using var ms = new MemoryStream();
+            image.SaveAsPng(ms, new PngEncoder { CompressionLevel = _compressionLevel });
+            var bytes = ms.ToArray();
+            _memoryFiles![id.RelativePath] = bytes;
+
+            FileCount++;
+            TotalBytes += bytes.Length;
+            return id;
+        }
+
         var absolute = Path.Combine(_absoluteDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
         // hexNaming: the path is content-derived (including colors, folded into the hash by the
@@ -198,6 +244,6 @@ public sealed class AssetStore
 
         FileCount++;
         TotalBytes += new FileInfo(absolute).Length;
-        return new AssetId($"{_relativeDir}/{relativePath}");
+        return id;
     }
 }

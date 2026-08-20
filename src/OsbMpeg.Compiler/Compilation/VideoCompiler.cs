@@ -68,7 +68,7 @@ public static class VideoCompiler
         var planByMember = plans.SelectMany(p => p.Members.Select(m => (Member: m, Plan: p)))
             .ToDictionary(t => t.Member, t => t.Plan);
         var assetStoreByPlan = new Dictionary<VideoSourcePlan, AssetStore>();
-        var scenesByPlan = new Dictionary<VideoSourcePlan, IReadOnlyList<ScenePlan>>();
+        var scenesByPlan = new Dictionary<VideoSourcePlan, List<ScenePlan>>();
         var consumedMembers = new HashSet<OsbvAnimationVideo>();
 
         var doc = new SbDocument();
@@ -103,12 +103,12 @@ public static class VideoCompiler
 
                     if (plan.Members.Count > 1 && SharesWindow(plan, info))
                     {
-                        await CompileSharedAsync(plan, info, doc, assetStore, scenes, hwAccel, ct);
+                        await CompileSharedAsync(plan, info, doc, assetStore, scenes, hwAccel, log, ct);
                         foreach (var m in plan.Members) consumedMembers.Add(m);
                     }
                     else
                     {
-                        await CompileMemberAsync(v, plan, info, doc, assetStore, scenes, hwAccel, ct);
+                        await CompileMemberAsync(v, plan, info, doc, assetStore, scenes, hwAccel, log, ct);
                         consumedMembers.Add(v);
                     }
 
@@ -140,17 +140,15 @@ public static class VideoCompiler
             return assetStoreByPlan[plan] = new AssetStore(absoluteDir, relativeDir, "", hexNaming: true);
         }
 
-        async Task<IReadOnlyList<ScenePlan>> ScenesFor(VideoSourcePlan plan, MediaInfo info)
+        async Task<List<ScenePlan>> ScenesFor(VideoSourcePlan plan, MediaInfo info)
         {
             if (scenesByPlan.TryGetValue(plan, out var existing)) return existing;
-            // videoCacheDir is the same {assetsRootAbs}/{VideoId} directory AssetStoreFor above
-            // writes its asset cache into — VideoId is now a stable hash of (path, fps), so this
-            // scene+tuning cache is anchored to the video file itself, not this plan's own window
-            // or which other sources happen to appear in this particular .osbv document. Two
-            // different projects referencing the same video land on the same cache file.
-            var videoCacheDir = Path.Combine(assetsRootAbs, plan.VideoId);
-            var scenes = await SceneCache.LoadOrBuildAsync(videoCacheDir, plan.Members[0].FilePath, info,
-                plan.Key.EffectiveFps, log, ct);
+            // In-memory only for this one CompileAsync call (see SceneCache.cs's own doc comment):
+            // detection runs once per plan here even though multiple AnimationVideo entries can
+            // reference it, and each scene's Tuned starts null, filled in lazily by
+            // EnsureTunedAsync only for scenes a caller actually ends up encoding.
+            var scenes = await SceneCache.BuildAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps,
+                hwAccel, log, ct);
             return scenesByPlan[plan] = scenes;
         }
     }
@@ -206,7 +204,8 @@ public static class VideoCompiler
     ///     sub-window and need re-anchoring to the storyboard's absolute timeline via offsetMs.
     /// </summary>
     private static async Task CompileMemberAsync(OsbvAnimationVideo v, VideoSourcePlan plan, MediaInfo info,
-        SbDocument doc, AssetStore assetStore, IReadOnlyList<ScenePlan> scenes, string? hwAccel, CancellationToken ct)
+        SbDocument doc, AssetStore assetStore, List<ScenePlan> scenes, string? hwAccel, Action<string>? log,
+        CancellationToken ct)
     {
         var (vStart, vEnd) = Window(v, info);
         var mapping = new CanvasMapping(info.Width, info.Height, v.X, v.Y);
@@ -214,17 +213,22 @@ public static class VideoCompiler
             ? new GroupTransformBaker(v.Commands, (float)v.X, (float)v.Y, plan.Key.EffectiveFps)
             : null;
 
-        foreach (var scene in scenes)
+        for (var i = 0; i < scenes.Count; i++)
         {
-            var (subStart, subEnd) = Clip(vStart, vEnd, scene);
+            var (subStart, subEnd) = Clip(vStart, vEnd, scenes[i]);
             if (subEnd <= subStart) continue;
+
+            var tuned = await SceneCache.EnsureTunedAsync(v.FilePath, info, plan.Key.EffectiveFps, scenes, i,
+                hwAccel, log, ct);
 
             var offsetMs = v.StartTimeMs + (subStart - vStart);
             var target = new TileEncodeLoop.EmitTarget(mapping, v.Layer, offsetMs, baker, doc.Add);
-            var loopOptions = LoopOptions(v.FilePath, info, plan.Key.EffectiveFps, subStart, subEnd, scene.Tuned,
+            var loopOptions = LoopOptions(v.FilePath, info, plan.Key.EffectiveFps, subStart, subEnd, tuned,
                 [target], hwAccel);
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
+            log?.Invoke($"encode scene [{subStart:F0},{subEnd:F0}) took {sw.ElapsedMilliseconds}ms");
         }
     }
 
@@ -235,7 +239,7 @@ public static class VideoCompiler
     ///     the class doc comment for why buffering is needed here and not in CompileMemberAsync.
     /// </summary>
     private static async Task CompileSharedAsync(VideoSourcePlan plan, MediaInfo info, SbDocument doc,
-        AssetStore assetStore, IReadOnlyList<ScenePlan> scenes, string? hwAccel, CancellationToken ct)
+        AssetStore assetStore, List<ScenePlan> scenes, string? hwAccel, Action<string>? log, CancellationToken ct)
     {
         var (vStart, vEnd) = Window(plan.Members[0], info);
         var mappings = new CanvasMapping[plan.Members.Count];
@@ -252,10 +256,13 @@ public static class VideoCompiler
             buffers[i] = [];
         }
 
-        foreach (var scene in scenes)
+        for (var si = 0; si < scenes.Count; si++)
         {
-            var (subStart, subEnd) = Clip(vStart, vEnd, scene);
+            var (subStart, subEnd) = Clip(vStart, vEnd, scenes[si]);
             if (subEnd <= subStart) continue;
+
+            var tuned = await SceneCache.EnsureTunedAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps,
+                scenes, si, hwAccel, log, ct);
 
             var targets = new TileEncodeLoop.EmitTarget[plan.Members.Count];
             for (var i = 0; i < plan.Members.Count; i++)
@@ -266,8 +273,10 @@ public static class VideoCompiler
             }
 
             var loopOptions = LoopOptions(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, subStart, subEnd,
-                scene.Tuned, targets, hwAccel);
+                tuned, targets, hwAccel);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
+            log?.Invoke($"encode scene [{subStart:F0},{subEnd:F0}) took {sw.ElapsedMilliseconds}ms");
         }
 
         foreach (var buffer in buffers)

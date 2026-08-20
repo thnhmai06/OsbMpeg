@@ -71,7 +71,8 @@ public static class ParameterTuner
     ///     candidate that looks cheap in isolation but is expensive specifically at the cut it owns.
     /// </summary>
     public static async Task<TunedParameters> TuneAsync(string inputPath, MediaInfo info, double fps,
-        double segmentStartMs, double segmentEndMs, bool isFirstSegment, Action<string>? log, CancellationToken ct)
+        double segmentStartMs, double segmentEndMs, bool isFirstSegment, string? hwAccel, Action<string>? log,
+        CancellationToken ct)
     {
         var segmentDurationMs = segmentEndMs - segmentStartMs;
         var sampleDurationMs = Math.Min(SampleWindowMs, segmentDurationMs);
@@ -82,7 +83,7 @@ public static class ParameterTuner
         return await TuneCoreAsync(
             (tileSize, hashQuantLevels, tileTolerance, colors) =>
                 ProbeAsync(inputPath, info, fps, sampleStartMs, sampleDurationMs, tileSize, hashQuantLevels,
-                    tileTolerance, colors, ct),
+                    tileTolerance, colors, hwAccel, ct),
             Path.GetFileName(inputPath), log);
     }
 
@@ -193,7 +194,8 @@ public static class ParameterTuner
         {
             var candidate = candidates[i];
             var result = results[i];
-            log?.Invoke($"  {axisName}={candidate}: PSNR={result.Psnr:F2}dB cost={result.Cost:F0}");
+            log?.Invoke($"  {axisName}={candidate}: PSNR={result.Psnr:F2}dB cost={result.Cost:F0} " +
+                        $"took={result.ElapsedMs}ms (decode={result.DecodeMs}ms render+psnr={result.RenderMs}ms objects={result.ObjectCount})");
 
             if (bestOverall is null || result.Psnr > bestOverall.Value.Psnr)
             {
@@ -213,61 +215,61 @@ public static class ParameterTuner
             : (bestOverallValue, bestOverall!.Value, false);
     }
 
-    internal readonly record struct ProbeResult(double Psnr, long AssetBytes, int CommandCount)
+    internal readonly record struct ProbeResult(double Psnr, long AssetBytes, int CommandCount, long ElapsedMs = 0,
+        long DecodeMs = 0, long RenderMs = 0, int ObjectCount = 0)
     {
         public double Cost => AssetBytes + CommandCount * BytesPerCommandEstimate;
     }
 
     private static async Task<ProbeResult> ProbeAsync(string inputPath, MediaInfo info, double fps,
         double windowStartMs, double windowDurationMs, int tileSize, int hashQuantLevels, int tileTolerance,
-        int colors, CancellationToken ct)
+        int colors, string? hwAccel, CancellationToken ct)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "osbmpeg_tune_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDir);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        try
+        // inMemory: true -- a probe's PNGs exist only to learn their byte size and to let the
+        // renderer read the same quantized pixels back for PSNR, never as a real deliverable (see
+        // AssetStore.cs's own doc comment on the `inMemory` param for the disk-I/O cost this
+        // avoids). No tempDir needed at all now -- nothing here touches the filesystem.
+        var assetStore = new AssetStore("", "assets", "", pngCompressionLevel: 1, inMemory: true);
+        var doc = new SbDocument();
+        var mapping = new CanvasMapping(info.Width, info.Height);
+        var target = new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add);
+        var loopOptions = new TileEncodeLoop.Options(
+            inputPath, info.Width, info.Height, fps,
+            TimeSpan.FromMilliseconds(windowStartMs), TimeSpan.FromMilliseconds(windowDurationMs),
+            tileSize, hashQuantLevels, false, tileTolerance, 300, 0.8, false, 17_000_000, [target], colors,
+            hwAccel);
+
+        // Capture each source frame's pixels as TileEncodeLoop decodes them for its own
+        // purposes, instead of decoding the same short window a second time afterward just
+        // for comparison — halves the ffmpeg process count per probe (this was the dominant
+        // cost the first time this ran: 28 ffmpeg spawns for a 14-probe tuning pass, ~5.5
+        // minutes for one 10s/720p source against a ~30-90s estimate).
+        var decodeSw = System.Diagnostics.Stopwatch.StartNew();
+        var sourceFrames = new List<byte[]>();
+        await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct,
+            (frame, _) => sourceFrames.Add(frame.Rgb.ToArray()));
+        var decodeMs = decodeSw.ElapsedMilliseconds;
+
+        var renderSw = System.Diagnostics.Stopwatch.StartNew();
+        var renderer = new SoftwareStoryboardRenderer(doc, "", info.Width, info.Height, assetStore);
+        var reconFrameCount = Math.Max(1, (int)Math.Ceiling(renderer.DurationMs / 1000.0 * fps));
+
+        double psnrSum = 0;
+        var compared = 0;
+
+        for (; compared < sourceFrames.Count && compared < reconFrameCount; compared++)
         {
-            // AssetId is stored relative to `tempDir` (the renderer's assetRootDir below), so
-            // AssetStore's own absolute write dir must be a subfolder of tempDir named the same as
-            // the relativeDir string it embeds in each AssetId -- otherwise the renderer looks for
-            // files one level away from where SavePng actually put them.
-            var assetStore = new AssetStore(Path.Combine(tempDir, "assets"), "assets", "", pngCompressionLevel: 1);
-            var doc = new SbDocument();
-            var mapping = new CanvasMapping(info.Width, info.Height);
-            var target = new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add);
-            var loopOptions = new TileEncodeLoop.Options(
-                inputPath, info.Width, info.Height, fps,
-                TimeSpan.FromMilliseconds(windowStartMs), TimeSpan.FromMilliseconds(windowDurationMs),
-                tileSize, hashQuantLevels, false, tileTolerance, 300, 0.8, false, 17_000_000, [target], colors);
-
-            // Capture each source frame's pixels as TileEncodeLoop decodes them for its own
-            // purposes, instead of decoding the same short window a second time afterward just
-            // for comparison — halves the ffmpeg process count per probe (this was the dominant
-            // cost the first time this ran: 28 ffmpeg spawns for a 14-probe tuning pass, ~5.5
-            // minutes for one 10s/720p source against a ~30-90s estimate).
-            var sourceFrames = new List<byte[]>();
-            await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct,
-                (frame, _) => sourceFrames.Add(frame.Rgb.ToArray()));
-
-            var renderer = new SoftwareStoryboardRenderer(doc, tempDir, info.Width, info.Height);
-            var reconFrameCount = Math.Max(1, (int)Math.Ceiling(renderer.DurationMs / 1000.0 * fps));
-
-            double psnrSum = 0;
-            var compared = 0;
-
-            for (; compared < sourceFrames.Count && compared < reconFrameCount; compared++)
-            {
-                var t = compared * 1000.0 / fps;
-                var canvas = renderer.RenderFrame(t);
-                psnrSum += Metrics.Psnr(canvas.Rgb, sourceFrames[compared]);
-            }
-
-            var psnr = compared == 0 ? 0 : psnrSum / compared;
-            return new ProbeResult(psnr, assetStore.TotalBytes, doc.CommandCount);
+            var t = compared * 1000.0 / fps;
+            var canvas = renderer.RenderFrame(t);
+            psnrSum += Metrics.Psnr(canvas.Rgb, sourceFrames[compared]);
         }
-        finally
-        {
-            Directory.Delete(tempDir, true);
-        }
+
+        var renderMs = renderSw.ElapsedMilliseconds;
+
+        var psnr = compared == 0 ? 0 : psnrSum / compared;
+        return new ProbeResult(psnr, assetStore.TotalBytes, doc.CommandCount, sw.ElapsedMilliseconds,
+            decodeMs, renderMs, doc.SpriteCount + doc.AnimationCount);
     }
 }

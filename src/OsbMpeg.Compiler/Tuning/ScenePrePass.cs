@@ -62,11 +62,13 @@ public static class ScenePrePass
     internal const double MinSceneMs = 1000;
 
     public static async Task<IReadOnlyList<double>> ScanAsync(string inputPath, int width, int height, double fps,
-        CancellationToken ct)
+        string? hwAccel, Action<string>? log, CancellationToken ct)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var grid = new TileGrid(width, height, BaselineTileSize);
         var tracker = new TileRunTracker(grid, BaselineHashQuantLevels, true, BaselineTileTolerance);
-        var frameOpts = new FrameSourceOptions(width, height, fps);
+        var frameOpts = new FrameSourceOptions(width, height, fps,
+            ExtraInputArgs: hwAccel is { } hw ? $"-hwaccel {hw}" : null);
 
         var samples = new List<(double Ms, int ClosedCount)>();
         await foreach (var frame in FrameSource.ReadFramesAsync(inputPath, frameOpts, ct))
@@ -77,7 +79,9 @@ public static class ScenePrePass
                 samples.Add((ms, closed.Count));
             }
 
-        return DetectCuts(samples, grid.TileCount);
+        var cuts = DetectCuts(samples, grid.TileCount);
+        log?.Invoke($"scene prepass {Path.GetFileName(inputPath)}: {sw.ElapsedMilliseconds}ms for {samples.Count} frames");
+        return cuts;
     }
 
     internal static List<double> DetectCuts(IEnumerable<(double Ms, int ClosedCount)> frames, int tileCount)
