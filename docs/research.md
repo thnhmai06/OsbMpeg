@@ -98,6 +98,55 @@ fix was proposed and priced: repeated/extended backward decode, new pending-run 
 this narrow with no reported real-workload impact. Revisit only if a real workload shows the miss
 rate mattering at scale; this measurement is the baseline to compare against if that happens.
 
+### Heatmap-adaptive tile partitioning (spike, not built)
+
+Idea: instead of a fixed uniform tile grid (one TileSize for the whole scene, merged after the
+fact by QuadtreeMerger), build a change-frequency heatmap from a fine-grained scan and partition
+the canvas top-down (large regions where content stays static, small regions where it thrashes),
+sized to match local content directly rather than searching a single global TileSize. Motivated by
+the same economics `AssetTrimmer`'s DEFLATE probe already established (bigger merged assets compress
+better up to a point, small fragmented files pay PNG header overhead) — the hoped-for win was
+finding the right merge boundaries from real content instead of QuadtreeMerger's own
+timing-coincidence luck.
+
+**First attempt had a real methodological bug**, caught before trusting the numbers: the top-down
+split decision used the *average* change-frequency across all fine tiles in a candidate region.
+Averaging hides exactly the failure case the idea needed to avoid — one small volatile corner (e.g.
+a moving object covering a fraction of a large region) forces the *whole* region's combined hash to
+change almost every frame regardless of how static the rest of it is, but a region-wide average
+stays low and never triggers a split. Result: fish_spinning's whole 1920x1080 canvas stayed one
+un-split region, re-encoding a full-frame PNG ~600 times (202MB for a 10s window). Same root cause
+as the `QuadtreeMerger` single-frame merge bug above — an aggregate signal missing localized
+volatility — caught the same way (checked the actual behavior, didn't trust the first number).
+Fixed by switching the split criterion to *max* change-frequency of any fine tile inside the
+candidate region.
+
+**Real (byte-accurate, not estimated) spike after the fix, three fixtures, real ContentHasher +
+in-memory AssetStore for genuine PNG-encoded costs**, each compared against this session's actual
+per-scene-tuned production output on the same content:
+
+| Fixture | Window | Adaptive assetBytes | Real tuned assetBytes | Ratio |
+|---|---|---|---|---|
+| fish_spinning | 10s | 201,209,266 | 76,154,338 | 2.6x worse |
+| minecraft | 10s | 375,766,670 | 69,576,841 | 5.4x worse |
+| short_animation | full 16.5s | 3,714,496 | 1,442,462 | 2.6x worse |
+
+Lost on all three, including the clean/graphic-content fixture the idea was expected to favor most
+(short_animation: 2294 emitted regions/runs vs. the real system's 116 sprites for the same content).
+
+**Two concrete, known confounds — this was not a fully fair fight**, not built further given the
+cost of fixing them: (1) the spike hardcoded Colors=0 (no PNG palette quantization) while the real
+system's tuned combo for short_animation used Colors=16 — a likely large, uncounted-for chunk of the
+gap. (2) The split threshold (max change-frequency > 0.15) was tried exactly once, not searched —
+`ParameterTuner`'s own coordinate-descent search across TileSize/HashQuantLevels/TileTolerance/Colors
+is what makes the real system's numbers a fair baseline in the first place; the spike's one arbitrary
+constant isn't a comparable effort. Real signal underneath the confounds, though: the real
+per-scene tuner independently *chose* TileSize=256 (large, uniform regions, accepting the re-emit
+cost) as optimal for exactly the high-motion fixtures this idea targeted — the opposite of what
+finer content-adaptive partitioning predicted would win. Not pursued further; would need
+Colors-quantization parity plus a real threshold search before the comparison means anything, and
+there's no evidence yet that investment would flip the outcome.
+
 ## Fixed bugs, with real measured impact
 
 ### `QuadtreeMerger` single-frame merge bug (commit `cdb5820`)
