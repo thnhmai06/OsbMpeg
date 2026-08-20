@@ -43,7 +43,7 @@ public static class TileEncodeLoop
                     ? batch
                     : QuadtreeMerger.Merge(batch, grid, o.MaxAssetPixels, 1000.0 / o.Fps);
                 var (sprites, animations) = animationDetector.Process(merged, o.TileSize);
-                Emit(sprites, animations, assetStore, o.Targets);
+                Emit(sprites, animations, assetStore, o.Targets, o.Colors);
 
                 onProgress?.Invoke(frameCount, frame.Pts);
             }
@@ -53,22 +53,22 @@ public static class TileEncodeLoop
             ? finalBatch
             : QuadtreeMerger.Merge(finalBatch, grid, o.MaxAssetPixels, 1000.0 / o.Fps);
         var (finalSprites, finalAnimations) = animationDetector.Process(finalMerged, o.TileSize);
-        Emit(finalSprites, finalAnimations, assetStore, o.Targets);
+        Emit(finalSprites, finalAnimations, assetStore, o.Targets, o.Colors);
 
         var (tailSprites, tailAnimations) = animationDetector.FlushAll();
-        Emit(tailSprites, tailAnimations, assetStore, o.Targets);
+        Emit(tailSprites, tailAnimations, assetStore, o.Targets, o.Colors);
 
         return new Result(frameCount, lastMs);
     }
 
     private static void Emit(List<TileRun> runs, List<AnimationCandidate> candidates, AssetStore assetStore,
-        IReadOnlyList<EmitTarget> targets)
+        IReadOnlyList<EmitTarget> targets, int colors)
     {
         foreach (var run in runs)
         {
             // Content-hash dedupe is shared across targets on purpose — identical pixels stay
             // one file regardless of how many targets place a sprite over them.
-            var asset = assetStore.GetOrAdd(run.Rgb, run.Width, run.Height, AssetConsumer.Sprite);
+            var asset = assetStore.GetOrAdd(run.Rgb, run.Width, run.Height, AssetConsumer.Sprite, colors);
 
             foreach (var target in targets)
             {
@@ -113,7 +113,7 @@ public static class TileEncodeLoop
             // its own WriteAnimation call, same as independent per-target decode would produce.
         foreach (var target in targets)
         {
-            var basePath = assetStore.WriteAnimation(c.Frames, c.Width, c.Height);
+            var basePath = assetStore.WriteAnimation(c.Frames, c.Width, c.Height, colors);
 
             if (target.Baker is null)
             {
@@ -184,6 +184,7 @@ public static class TileEncodeLoop
         bool NoQuadtree,
         long MaxAssetPixels,
         IReadOnlyList<EmitTarget> Targets,
+        int Colors = 0,
         string? HwAccel = null);
 
     public sealed record Result(int FrameCount, double LastFrameMs);

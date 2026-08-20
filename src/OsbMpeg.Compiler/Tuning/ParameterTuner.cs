@@ -55,22 +55,29 @@ public static class ParameterTuner
     private static readonly int[] ToleranceCandidates = [0, 4, 8, 16];
 
     /// <summary>
-    ///     Sample window is anchored to the whole source file's own duration
-    ///     (<paramref name="info" />.Duration), not to whatever [start,end) window this particular
-    ///     .osbv's VideoSourcePlan happens to request. Two different .osbv projects referencing the
-    ///     same video file with different windows must land on the same sample window here, or
-    ///     they'd legitimately tune different TileSize/etc for genuinely identical overlapping
-    ///     content — which would hash differently and defeat the persistent AssetStore cache across
-    ///     those two compiles even though the underlying pixels never changed. Centering on the
-    ///     video's own middle, independent of any one project's window, is what makes tuning a pure
-    ///     function of (video file, tuning constants) instead of (video file, this compile's window).
+    ///     Tunes one scene/segment of a video — <paramref name="segmentStartMs" />/
+    ///     <paramref name="segmentEndMs" /> are absolute, file-relative timestamps (from
+    ///     SceneCache's scene list, itself anchored to the whole file so cross-project cache sharing
+    ///     still holds — see SceneCache.cs), not the calling .osbv project's own window. A video
+    ///     with no detected scene cuts is exactly one segment spanning [0, duration) with
+    ///     <paramref name="isFirstSegment" />=true — the general form this always was, not a
+    ///     parallel path (this API used to be file-duration-centered with no segment concept; that
+    ///     behavior is reproduced exactly by that one-segment case).
+    ///     The first segment samples a window centered within itself, same as the old whole-file
+    ///     design, to avoid an atypical intro/title-card. Every later segment (which always starts
+    ///     right after a real cut, per SceneCache) samples starting at its own beginning instead —
+    ///     anchoring there folds that segment's own one-time full-canvas re-emit cost into its own
+    ///     probe; a mid-segment sample would never see it, silently under-costing a big TileSize
+    ///     candidate that looks cheap in isolation but is expensive specifically at the cut it owns.
     /// </summary>
     public static async Task<TunedParameters> TuneAsync(string inputPath, MediaInfo info, double fps,
-        Action<string>? log, CancellationToken ct)
+        double segmentStartMs, double segmentEndMs, bool isFirstSegment, Action<string>? log, CancellationToken ct)
     {
-        var durationMs = info.Duration.TotalMilliseconds;
-        var sampleDurationMs = Math.Min(SampleWindowMs, durationMs);
-        var sampleStartMs = Math.Max(0, (durationMs - sampleDurationMs) / 2);
+        var segmentDurationMs = segmentEndMs - segmentStartMs;
+        var sampleDurationMs = Math.Min(SampleWindowMs, segmentDurationMs);
+        var sampleStartMs = isFirstSegment
+            ? segmentStartMs + Math.Max(0, (segmentDurationMs - sampleDurationMs) / 2)
+            : segmentStartMs;
 
         return await TuneCoreAsync(
             (tileSize, hashQuantLevels, tileTolerance, colors) =>
@@ -89,31 +96,38 @@ public static class ParameterTuner
     internal static async Task<TunedParameters> TuneCoreAsync(
         Func<int, int, int, int, Task<ProbeResult>> probe, string label, Action<string>? log)
     {
-        var tileSize = 64;
         var hashQuantLevels = 32;
         var tileTolerance = 8;
         var colors = 0;
 
-        var baseline = await probe(tileSize, hashQuantLevels, tileTolerance, colors);
+        // TileSize=64 with the other 3 params at their defaults IS today's baseline combo, and
+        // it's already one of TileSizeCandidates — probe the whole axis in one concurrent batch
+        // and pull the baseline out of whichever result comes back for value 64, instead of a
+        // separate blocking probe that used to run in front of this axis (re-probing that exact
+        // same (64,32,8,0) tuple a second time before the axis's own sweep even started).
+        var tileSizeResults = await Task.WhenAll(
+            TileSizeCandidates.Select(v => probe(v, hashQuantLevels, tileTolerance, colors)));
+        var baseline = tileSizeResults[Array.IndexOf(TileSizeCandidates, 64)];
         var floor = baseline.Psnr - TargetSlackDb;
         log?.Invoke($"tuning {label}: baseline PSNR={baseline.Psnr:F2}dB, floor={floor:F2}dB");
 
-        (tileSize, _) = await BestAsync(TileSizeCandidates,
-            v => probe(v, hashQuantLevels, tileTolerance, colors), floor, tileSize, log, nameof(tileSize));
+        var (tileSize, tileSizeWin, _) =
+            Select(TileSizeCandidates, tileSizeResults, floor, 64, log, "tileSize");
 
-        (colors, _) = await BestAsync(ColorsCandidates,
-            v => probe(tileSize, hashQuantLevels, tileTolerance, v), floor, colors, log, nameof(colors));
+        // Every later axis's "unchanged" candidate — the value already fixed on entry — probes
+        // the exact same tuple the previous axis's own winning candidate already resolved (same
+        // params, nothing new varies). Carry that ProbeResult forward as a seed so BestAsync
+        // skips re-probing it instead of paying for the same deterministic combo twice.
+        var (colorsChosen, colorsWin, _) = await BestAsync(ColorsCandidates,
+            v => probe(tileSize, hashQuantLevels, tileTolerance, v), floor, colors, tileSizeWin, log, nameof(colors));
 
-        (hashQuantLevels, _) = await BestAsync(HashQuantCandidates,
-            v => probe(tileSize, v, tileTolerance, colors), floor, hashQuantLevels, log, nameof(hashQuantLevels));
+        var (hashQuantChosen, hashQuantWin, _) = await BestAsync(HashQuantCandidates,
+            v => probe(tileSize, v, tileTolerance, colorsChosen), floor, hashQuantLevels, colorsWin, log,
+            nameof(hashQuantLevels));
 
-        // The last axis's own sweep already re-probes the fully-combined tuple for each of its
-        // candidates (tileSize/colors/hashQuantLevels are all fixed by now) — so whether it found
-        // anything meeting the floor at all IS the "did the whole search succeed" answer. No need
-        // to re-probe the same deterministic combo again to find out.
-        bool metFloor;
-        (tileTolerance, metFloor) = await BestAsync(ToleranceCandidates,
-            v => probe(tileSize, hashQuantLevels, v, colors), floor, tileTolerance, log, nameof(tileTolerance));
+        var (toleranceChosen, _, metFloor) = await BestAsync(ToleranceCandidates,
+            v => probe(tileSize, hashQuantChosen, v, colorsChosen), floor, tileTolerance, hashQuantWin, log,
+            nameof(tileTolerance));
 
         if (!metFloor)
         {
@@ -123,29 +137,53 @@ public static class ParameterTuner
         }
 
         log?.Invoke(
-            $"tuning {label}: chosen TileSize={tileSize} HashQuantLevels={hashQuantLevels} " +
-            $"TileTolerance={tileTolerance} Colors={colors} (baseline PSNR={baseline.Psnr:F2}dB)");
-        return new TunedParameters(tileSize, hashQuantLevels, tileTolerance, colors);
+            $"tuning {label}: chosen TileSize={tileSize} HashQuantLevels={hashQuantChosen} " +
+            $"TileTolerance={toleranceChosen} Colors={colorsChosen} (baseline PSNR={baseline.Psnr:F2}dB)");
+        return new TunedParameters(tileSize, hashQuantChosen, toleranceChosen, colorsChosen);
+    }
+
+    /// <summary>
+    ///     Probes every candidate except <paramref name="current" /> — that one's result is
+    ///     already known (<paramref name="seed" />, the previous axis's own winning probe, which
+    ///     necessarily used the exact same tuple this axis's unchanged candidate would probe
+    ///     again) — then hands the assembled results to <see cref="Select" />.
+    ///     Candidates within one axis are independent (each writes to its own throwaway temp dir,
+    ///     no shared mutable state), so they run concurrently via Task.WhenAll rather than one at a
+    ///     time — axes still run sequentially against each other (each one's candidates need the
+    ///     previous axis's chosen value), but this is the one place probes can overlap without
+    ///     changing what the search decides.
+    /// </summary>
+    private static async Task<(int Value, ProbeResult Result, bool MetFloor)> BestAsync(int[] candidates,
+        Func<int, Task<ProbeResult>> probe, double floor, int current, ProbeResult seed, Action<string>? log,
+        string axisName)
+    {
+        var seedIndex = Array.IndexOf(candidates, current);
+        var tasks = new Task<ProbeResult>?[candidates.Length];
+        for (var i = 0; i < candidates.Length; i++)
+            if (i != seedIndex)
+                tasks[i] = probe(candidates[i]);
+
+        await Task.WhenAll(tasks.Where(t => t is not null)!);
+
+        var results = new ProbeResult[candidates.Length];
+        for (var i = 0; i < candidates.Length; i++)
+            results[i] = i == seedIndex ? seed : tasks[i]!.Result;
+
+        return Select(candidates, results, floor, current, log, axisName);
     }
 
     /// <summary>
     ///     Picks the candidate with the smallest combined cost among those meeting
     ///     <paramref name="floor" />; if none do, falls back to the highest-PSNR candidate (a later
     ///     axis may still recover the target) and reports <c>MetFloor: false</c> so the caller knows
-    ///     this axis's own contribution never actually cleared the bar.
-    ///     Candidates within one axis are independent (each writes to its own throwaway temp dir,
-    ///     no shared mutable state), so they run concurrently via Task.WhenAll rather than one at a
-    ///     time — axes still run sequentially against each other (each one's candidates need the
-    ///     previous axis's chosen value), but this is the one place probes can overlap without
-    ///     changing what the search decides. Task.WhenAll preserves input order in its result array
-    ///     regardless of completion order, so tie-breaking (first-seen-wins on equal cost) is
-    ///     unaffected by running in parallel.
+    ///     this axis's own contribution never actually cleared the bar. Task.WhenAll (in
+    ///     <see cref="BestAsync" />) preserves input order in its result array regardless of
+    ///     completion order, so tie-breaking (first-seen-wins on equal cost) is unaffected by
+    ///     probing concurrently.
     /// </summary>
-    private static async Task<(int Value, bool MetFloor)> BestAsync(int[] candidates,
-        Func<int, Task<ProbeResult>> probe, double floor, int current, Action<string>? log, string axisName)
+    private static (int Value, ProbeResult Result, bool MetFloor) Select(int[] candidates, ProbeResult[] results,
+        double floor, int current, Action<string>? log, string axisName)
     {
-        var results = await Task.WhenAll(candidates.Select(c => probe(c)));
-
         ProbeResult? bestPassing = null;
         var bestPassingValue = current;
         ProbeResult? bestOverall = null;
@@ -170,7 +208,9 @@ public static class ParameterTuner
             }
         }
 
-        return bestPassing is not null ? (bestPassingValue, true) : (bestOverallValue, false);
+        return bestPassing is not null
+            ? (bestPassingValue, bestPassing.Value, true)
+            : (bestOverallValue, bestOverall!.Value, false);
     }
 
     internal readonly record struct ProbeResult(double Psnr, long AssetBytes, int CommandCount)
@@ -191,15 +231,14 @@ public static class ParameterTuner
             // AssetStore's own absolute write dir must be a subfolder of tempDir named the same as
             // the relativeDir string it embeds in each AssetId -- otherwise the renderer looks for
             // files one level away from where SavePng actually put them.
-            var assetStore = new AssetStore(Path.Combine(tempDir, "assets"), "assets", "", colors,
-                pngCompressionLevel: 1);
+            var assetStore = new AssetStore(Path.Combine(tempDir, "assets"), "assets", "", pngCompressionLevel: 1);
             var doc = new SbDocument();
             var mapping = new CanvasMapping(info.Width, info.Height);
             var target = new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add);
             var loopOptions = new TileEncodeLoop.Options(
                 inputPath, info.Width, info.Height, fps,
                 TimeSpan.FromMilliseconds(windowStartMs), TimeSpan.FromMilliseconds(windowDurationMs),
-                tileSize, hashQuantLevels, false, tileTolerance, 300, 0.8, false, 17_000_000, [target]);
+                tileSize, hashQuantLevels, false, tileTolerance, 300, 0.8, false, 17_000_000, [target], colors);
 
             // Capture each source frame's pixels as TileEncodeLoop decodes them for its own
             // purposes, instead of decoding the same short window a second time afterward just

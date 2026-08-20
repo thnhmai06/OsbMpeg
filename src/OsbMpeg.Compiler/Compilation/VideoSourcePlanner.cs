@@ -1,13 +1,22 @@
+using System.Text;
 using OsbMpeg.Compiler.Media;
 using OsbMpeg.Parsers.Osbv;
+using System.IO.Hashing;
 
 namespace OsbMpeg.Compiler.Compilation;
 
 /// <summary>
 ///     One shared decode job: every AnimationVideo in Members reduced to the same
-///     VideoSourceKey, extracted once over their union time range. VideoId is a stable, 0-based
-///     hex counter in first-seen order — matches the existing asset path convention
-///     (video-id/s/&lt;hex&gt;.png, video-id/a/&lt;hex&gt;/f&lt;n&gt;.png).
+///     VideoSourceKey, extracted once over their union time range. VideoId is a stable hash of the
+///     key's own (NormalizedPath, EffectiveFps) — a pure function of the video source, independent
+///     of which other sources appear in the same document or in what order — matches the existing
+///     asset path convention (video-id/s/&lt;hex&gt;.png, video-id/a/&lt;hex&gt;/f&lt;n&gt;.png).
+///     Stability matters beyond one compile: it's also the cache key `AssetStore`'s persistent
+///     content-addressed layout and `SceneCache`'s per-video scene/tuning cache both live under —
+///     two different .osbv projects referencing the same video file must land on the same VideoId
+///     to ever share either cache, which a plain first-seen-order counter (the original design)
+///     could not guarantee once two projects disagreed on how many *other* sources they reference
+///     or in what order.
 /// </summary>
 public sealed record VideoSourcePlan(
     VideoSourceKey Key,
@@ -52,16 +61,22 @@ public static class VideoSourcePlanner
         }
 
         var plans = new List<VideoSourcePlan>(orderedKeys.Count);
-        for (var i = 0; i < orderedKeys.Count; i++)
+        foreach (var key in orderedKeys)
         {
-            var key = orderedKeys[i];
             var group = members[key];
             var durationMs = durations[key];
             var start = group.Min(m => m.VideoStartMs ?? 0);
             var end = group.Max(m => m.VideoEndMs ?? durationMs);
-            plans.Add(new VideoSourcePlan(key, i.ToString("x"), durationMs, start, end, group));
+            plans.Add(new VideoSourcePlan(key, VideoId(key), durationMs, start, end, group));
         }
 
         return plans;
+    }
+
+    private static string VideoId(VideoSourceKey key)
+    {
+        var bytes = Encoding.UTF8.GetBytes($"{key.NormalizedPath}|{key.EffectiveFps}");
+        var hash = XxHash128.HashToUInt128(bytes);
+        return hash.ToString("x32")[..16];
     }
 }

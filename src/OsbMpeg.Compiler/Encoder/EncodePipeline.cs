@@ -33,7 +33,7 @@ public sealed class EncodePipeline(EncodeOptions options)
         Directory.CreateDirectory(options.AssetDir);
 
         var assetStore = new AssetStore(options.AssetDir, options.AssetRelativeDir, options.AssetNamePrefix,
-            options.Colors, options.PngCompressionLevel);
+            options.PngCompressionLevel);
         var doc = new SbDocument();
         var mapping = new CanvasMapping(width, height);
 
@@ -41,7 +41,7 @@ public sealed class EncodePipeline(EncodeOptions options)
             options.InputPath, width, height, fps, options.Start, options.Duration,
             options.TileSize, options.HashQuantLevels, options.RawSnapshot, options.TileTolerance, options.Gop,
             options.MinAnimationUniqueness, options.NoQuadtree, options.MaxAssetPixels,
-            [new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add)]);
+            [new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add)], options.Colors);
 
         var result = await TileEncodeLoop.RunAsync(loopOptions, assetStore,
             (frame, pts) => onProgress?.Invoke(new EncodeProgress(frame, estimatedTotalFrames, doc.SpriteCount,

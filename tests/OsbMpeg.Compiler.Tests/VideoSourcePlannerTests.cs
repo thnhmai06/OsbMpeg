@@ -41,7 +41,7 @@ public class VideoSourcePlannerTests
 
         Assert.Single(plans);
         Assert.Equal(2, plans[0].Members.Count);
-        Assert.Equal("0", plans[0].VideoId);
+        Assert.False(string.IsNullOrEmpty(plans[0].VideoId));
     }
 
     [Fact]
@@ -70,10 +70,29 @@ public class VideoSourcePlannerTests
         var plans = await VideoSourcePlanner.PlanAsync(videos, FakeProbe(info));
 
         Assert.Equal(2, plans.Count);
-        Assert.Equal("0", plans[0].VideoId);
-        Assert.Equal("1", plans[1].VideoId);
+        Assert.NotEqual(plans[0].VideoId, plans[1].VideoId);
         Assert.Contains("b.mp4", plans[0].Key.NormalizedPath);
         Assert.Contains("a.mp4", plans[1].Key.NormalizedPath);
+    }
+
+    [Fact]
+    public async Task VideoId_IsStableRegardlessOfOtherSourcesOrOrder()
+    {
+        var info = new Dictionary<string, MediaInfo>
+        {
+            [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264"),
+            [Path.GetFullPath("b.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264")
+        };
+
+        // "a.mp4" is first in one document, second in another (e.g. a different .osbv project) --
+        // its VideoId must be identical both times, since it's the same underlying video/fps and
+        // that's the key the persistent asset cache and scene cache both share on.
+        var plansA = await VideoSourcePlanner.PlanAsync([Video("a.mp4", 0), Video("b.mp4", 0)], FakeProbe(info));
+        var plansB = await VideoSourcePlanner.PlanAsync([Video("b.mp4", 0), Video("a.mp4", 0)], FakeProbe(info));
+
+        var aVideoId = plansA.Single(p => p.Key.NormalizedPath.Contains("a.mp4")).VideoId;
+        var aVideoIdAgain = plansB.Single(p => p.Key.NormalizedPath.Contains("a.mp4")).VideoId;
+        Assert.Equal(aVideoId, aVideoIdAgain);
     }
 
     [Fact]

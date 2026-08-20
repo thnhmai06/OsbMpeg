@@ -32,14 +32,18 @@ public enum AssetConsumer : byte
 ///     same quantized bytes (128-bit XXH3, no adversary in this pipeline — see ContentHasher) —
 ///     never trust an existing file under the legacy counter layout below, where the same name can
 ///     legitimately mean different content across runs.
-///     Cache reuse is contingent on --tile-size, --hash-quant, and --colors staying the same
-///     across runs on the same footage: the hash covers the whole tile buffer, so a different
-///     TileSize means every tile is a different byte length and every hash changes — the entire
-///     cache misses, not just the tiles whose visible content actually changed. That's correct
-///     (a 160px tile and a 320px tile really are different assets), just worth stating plainly: a
-///     future auto-tuner that re-picks TileSize per invocation would get zero reuse from this
-///     cache on every run. It must converge to one stable value per piece of content and hold it
-///     across re-compiles, not vary it per invocation, for this cache to pay off at all.
+///     Cache reuse is contingent on --tile-size and --hash-quant staying the same across runs on
+///     the same footage: the hash covers the whole tile buffer, so a different TileSize means
+///     every tile is a different byte length and every hash changes — the entire cache misses,
+///     not just the tiles whose visible content actually changed. That's correct (a 160px tile
+///     and a 320px tile really are different assets), just worth stating plainly: an auto-tuner
+///     that re-picks TileSize per invocation gets zero reuse from this cache on every run. It must
+///     converge to one stable value per piece of content and hold it across re-compiles, not vary
+///     it per invocation, for this cache to pay off at all. Colors is different in kind — folded
+///     into the content hash as XXH3's seed (GetOrAdd/WriteAnimation) rather than fixed at
+///     construction, specifically so per-scene tuning can pick a different Colors value per scene
+///     within one AssetStore/VideoId without two scenes' differently-quantized requests for the
+///     same raw pixels colliding onto one file.
 ///     legacy layout (whole-canvas bench path): sprites/{prefix}{n}.png,
 ///     animations/a{id}/a{id}.png (+ per-frame a{id}{i}.png written by WriteAnimation) — a plain
 ///     per-process counter, one fresh output dir per invocation, never reused across runs.
@@ -64,7 +68,6 @@ public sealed class AssetStore
 {
     private readonly string _absoluteDir;
     private readonly Dictionary<UInt128, AssetId> _animationDedupe = new();
-    private readonly int _colors;
     private readonly PngCompressionLevel _compressionLevel;
     private readonly Dictionary<(AssetConsumer Consumer, UInt128 Hash), AssetId> _dedupe = new();
     private readonly bool _hexNaming;
@@ -79,13 +82,12 @@ public sealed class AssetStore
     ///     legacy sprites/{prefix}{n}.png / animations/a{id}/a{id}{n}.png layout the old
     ///     whole-canvas CLI still writes and validates against.
     /// </param>
-    public AssetStore(string absoluteAssetDir, string relativeDirInOsb, string namePrefix, int colors = 0,
+    public AssetStore(string absoluteAssetDir, string relativeDirInOsb, string namePrefix,
         int pngCompressionLevel = 6, bool hexNaming = false)
     {
         _absoluteDir = absoluteAssetDir;
         _relativeDir = relativeDirInOsb;
         _namePrefix = namePrefix;
-        _colors = colors;
         _compressionLevel = (PngCompressionLevel)Math.Clamp(pngCompressionLevel, 0, 9);
         _hexNaming = hexNaming;
         Directory.CreateDirectory(absoluteAssetDir);
@@ -97,18 +99,24 @@ public sealed class AssetStore
 
     /// <summary>
     ///     rgb is packed Rgb24 (3 bytes/pixel, row-major, no padding) — the exact
-    ///     layout ffmpeg's rawvideo/rgb24 output uses.
+    ///     layout ffmpeg's rawvideo/rgb24 output uses. <paramref name="colors" /> (the PNG
+    ///     palette-quantization level to encode this asset with) is folded into the hash as XXH3's
+    ///     seed, not just used for the PNG write below — per-scene tuning can pick a different
+    ///     Colors value for different scenes sharing one AssetStore/VideoId, and the same raw tile
+    ///     content quantized two different ways is two different assets, not one; hashing on raw
+    ///     bytes alone would let whichever scene wrote first silently dictate the quantization the
+    ///     other scene's (never re-checked, hexNaming skips existing files) request wanted too.
     /// </summary>
-    public AssetId GetOrAdd(ReadOnlySpan<byte> rgb, int width, int height, AssetConsumer consumer)
+    public AssetId GetOrAdd(ReadOnlySpan<byte> rgb, int width, int height, AssetConsumer consumer, int colors)
     {
-        var hash = XxHash128.HashToUInt128(rgb, 0);
+        var hash = XxHash128.HashToUInt128(rgb, colors);
         var key = (consumer, hash);
 
         if (_dedupe.TryGetValue(key, out var existing))
             return existing;
 
         var relativePath = _hexNaming ? $"s/{hash:x32}.png" : $"sprites/{_namePrefix}{_counter++}.png";
-        var id = SavePng(relativePath, rgb, width, height);
+        var id = SavePng(relativePath, rgb, width, height, colors);
         _dedupe[key] = id;
         return id;
     }
@@ -124,7 +132,7 @@ public sealed class AssetStore
     ///     legacy layout: not deduped — a frame's filename is positionally fixed by its
     ///     per-invocation counter, so there's nothing to look up.
     /// </summary>
-    public AssetId WriteAnimation(IReadOnlyList<byte[]> frames, int width, int height)
+    public AssetId WriteAnimation(IReadOnlyList<byte[]> frames, int width, int height, int colors)
     {
         string relDir;
         string baseFileName;
@@ -132,7 +140,10 @@ public sealed class AssetStore
 
         if (_hexNaming)
         {
-            var hasher = new XxHash128();
+            // colors folded in as the hasher's seed — same reasoning as GetOrAdd above: two
+            // scenes sharing an AssetStore could otherwise want the same frame sequence
+            // quantized two different ways.
+            var hasher = new XxHash128(colors);
             foreach (var frame in frames)
                 hasher.Append(frame);
             hash = hasher.GetCurrentHashAsUInt128();
@@ -150,7 +161,7 @@ public sealed class AssetStore
         }
 
         for (var i = 0; i < frames.Count; i++)
-            SavePng($"{relDir}/{baseFileName.Replace(".", $"{i}.")}", frames[i], width, height);
+            SavePng($"{relDir}/{baseFileName.Replace(".", $"{i}.")}", frames[i], width, height, colors);
         AnimationFrameCount += frames.Count;
 
         var id = new AssetId($"{_relativeDir}/{relDir}/{baseFileName}");
@@ -164,14 +175,15 @@ public sealed class AssetStore
     ///     Forward-slash path relative to the asset dir; may include
     ///     subdirectories, which are created as needed.
     /// </param>
-    private AssetId SavePng(string relativePath, ReadOnlySpan<byte> rgb, int width, int height)
+    private AssetId SavePng(string relativePath, ReadOnlySpan<byte> rgb, int width, int height, int colors)
     {
         var absolute = Path.Combine(_absoluteDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
 
-        // hexNaming: the path is content-derived, so an existing file at this exact path is
-        // guaranteed to already hold this exact content (from an earlier run) — skip re-encoding.
-        // Never do this under the legacy counter layout, where the same path can legitimately
-        // hold different content across separate invocations.
+        // hexNaming: the path is content-derived (including colors, folded into the hash by the
+        // caller), so an existing file at this exact path is guaranteed to already hold this
+        // exact content quantized this exact way — skip re-encoding. Never do this under the
+        // legacy counter layout, where the same path can legitimately hold different content
+        // across separate invocations.
         if (!_hexNaming || !File.Exists(absolute))
         {
             var dir = Path.GetDirectoryName(absolute);
@@ -179,8 +191,8 @@ public sealed class AssetStore
                 Directory.CreateDirectory(dir);
 
             using var image = Image.LoadPixelData<Rgb24>(rgb, width, height);
-            if (_colors > 0)
-                image.Mutate(ctx => ctx.Quantize(new OctreeQuantizer(new QuantizerOptions { MaxColors = _colors })));
+            if (colors > 0)
+                image.Mutate(ctx => ctx.Quantize(new OctreeQuantizer(new QuantizerOptions { MaxColors = colors })));
             image.SaveAsPng(absolute, new PngEncoder { CompressionLevel = _compressionLevel });
         }
 

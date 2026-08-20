@@ -68,7 +68,7 @@ public static class VideoCompiler
         var planByMember = plans.SelectMany(p => p.Members.Select(m => (Member: m, Plan: p)))
             .ToDictionary(t => t.Member, t => t.Plan);
         var assetStoreByPlan = new Dictionary<VideoSourcePlan, AssetStore>();
-        var tunedByPlan = new Dictionary<VideoSourcePlan, TunedParameters>();
+        var scenesByPlan = new Dictionary<VideoSourcePlan, IReadOnlyList<ScenePlan>>();
         var consumedMembers = new HashSet<OsbvAnimationVideo>();
 
         var doc = new SbDocument();
@@ -98,17 +98,17 @@ public static class VideoCompiler
 
                     var plan = planByMember[v];
                     var info = probeCache[Path.GetFullPath(v.FilePath)];
-                    var tuned = await TunedFor(plan, info);
-                    var assetStore = AssetStoreFor(plan, tuned.Colors);
+                    var scenes = await ScenesFor(plan, info);
+                    var assetStore = AssetStoreFor(plan);
 
                     if (plan.Members.Count > 1 && SharesWindow(plan, info))
                     {
-                        await CompileSharedAsync(plan, info, doc, assetStore, tuned, hwAccel, ct);
+                        await CompileSharedAsync(plan, info, doc, assetStore, scenes, hwAccel, ct);
                         foreach (var m in plan.Members) consumedMembers.Add(m);
                     }
                     else
                     {
-                        await CompileMemberAsync(v, plan, info, doc, assetStore, tuned, hwAccel, ct);
+                        await CompileMemberAsync(v, plan, info, doc, assetStore, scenes, hwAccel, ct);
                         consumedMembers.Add(v);
                     }
 
@@ -132,24 +132,26 @@ public static class VideoCompiler
             return info;
         }
 
-        AssetStore AssetStoreFor(VideoSourcePlan plan, int colors)
+        AssetStore AssetStoreFor(VideoSourcePlan plan)
         {
             if (assetStoreByPlan.TryGetValue(plan, out var existing)) return existing;
             var absoluteDir = Path.Combine(assetsRootAbs, plan.VideoId);
             var relativeDir = $"{assetRelativeRoot}/{plan.VideoId}";
-            return assetStoreByPlan[plan] = new AssetStore(absoluteDir, relativeDir, "", colors, hexNaming: true);
+            return assetStoreByPlan[plan] = new AssetStore(absoluteDir, relativeDir, "", hexNaming: true);
         }
 
-        async Task<TunedParameters> TunedFor(VideoSourcePlan plan, MediaInfo info)
+        async Task<IReadOnlyList<ScenePlan>> ScenesFor(VideoSourcePlan plan, MediaInfo info)
         {
-            if (tunedByPlan.TryGetValue(plan, out var existing)) return existing;
-            // Anchored to the whole source file's own duration, not this plan's [start,end)
-            // window — see ParameterTuner.TuneAsync's doc comment: two .osbv projects referencing
-            // the same video with different windows must tune the same way, or identical
-            // overlapping content would hash differently between them and never share the cache.
-            var tuned = await ParameterTuner.TuneAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, log,
-                ct);
-            return tunedByPlan[plan] = tuned;
+            if (scenesByPlan.TryGetValue(plan, out var existing)) return existing;
+            // videoCacheDir is the same {assetsRootAbs}/{VideoId} directory AssetStoreFor above
+            // writes its asset cache into — VideoId is now a stable hash of (path, fps), so this
+            // scene+tuning cache is anchored to the video file itself, not this plan's own window
+            // or which other sources happen to appear in this particular .osbv document. Two
+            // different projects referencing the same video land on the same cache file.
+            var videoCacheDir = Path.Combine(assetsRootAbs, plan.VideoId);
+            var scenes = await SceneCache.LoadOrBuildAsync(videoCacheDir, plan.Members[0].FilePath, info,
+                plan.Key.EffectiveFps, log, ct);
+            return scenesByPlan[plan] = scenes;
         }
     }
 
@@ -189,54 +191,92 @@ public static class VideoCompiler
             false,
             17_000_000,
             targets,
+            tuned.Colors,
             hwAccel);
     }
 
+    /// <summary>
+    ///     One member's own [start,end) window, clipped against each scene it overlaps —
+    ///     one TileEncodeLoop.RunAsync call per overlapping scene, each with that scene's own
+    ///     TunedParameters (a fresh TileGrid/TileRunTracker/AnimationDetector per call — a scene
+    ///     boundary is just where one windowed sub-encode ends and the next begins, the same
+    ///     machinery a single non-clipped window already used). VideoFrame.Pts is always 0-based
+    ///     *within its own decode's output stream* regardless of any ffmpeg seek offset (confirmed
+    ///     at FrameSource.cs), so each sub-encode's own TileRun.StartMs/EndMs are local to that
+    ///     sub-window and need re-anchoring to the storyboard's absolute timeline via offsetMs.
+    /// </summary>
     private static async Task CompileMemberAsync(OsbvAnimationVideo v, VideoSourcePlan plan, MediaInfo info,
-        SbDocument doc, AssetStore assetStore, TunedParameters tuned, string? hwAccel, CancellationToken ct)
+        SbDocument doc, AssetStore assetStore, IReadOnlyList<ScenePlan> scenes, string? hwAccel, CancellationToken ct)
     {
-        var (startMs, endMs) = Window(v, info);
+        var (vStart, vEnd) = Window(v, info);
         var mapping = new CanvasMapping(info.Width, info.Height, v.X, v.Y);
         var baker = v.Commands.Count > 0
             ? new GroupTransformBaker(v.Commands, (float)v.X, (float)v.Y, plan.Key.EffectiveFps)
             : null;
-        var target = new TileEncodeLoop.EmitTarget(mapping, v.Layer, v.StartTimeMs, baker, doc.Add);
-        var loopOptions =
-            LoopOptions(v.FilePath, info, plan.Key.EffectiveFps, startMs, endMs, tuned, [target], hwAccel);
 
-        await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
+        foreach (var scene in scenes)
+        {
+            var (subStart, subEnd) = Clip(vStart, vEnd, scene);
+            if (subEnd <= subStart) continue;
+
+            var offsetMs = v.StartTimeMs + (subStart - vStart);
+            var target = new TileEncodeLoop.EmitTarget(mapping, v.Layer, offsetMs, baker, doc.Add);
+            var loopOptions = LoopOptions(v.FilePath, info, plan.Key.EffectiveFps, subStart, subEnd, scene.Tuned,
+                [target], hwAccel);
+
+            await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
+        }
     }
 
     /// <summary>
-    ///     Runs one shared decode for every member of a same-window plan, buffering each
-    ///     member's emitted objects separately and flushing them into doc in member (= original
-    ///     declaration) order — see the class doc comment for why buffering is needed here and not
-    ///     in CompileMemberAsync.
+    ///     Runs one shared decode per overlapping scene for every member of a same-window plan,
+    ///     buffering each member's emitted objects (across all scenes) separately and flushing
+    ///     them into doc in member (= original declaration) order once every scene has run — see
+    ///     the class doc comment for why buffering is needed here and not in CompileMemberAsync.
     /// </summary>
     private static async Task CompileSharedAsync(VideoSourcePlan plan, MediaInfo info, SbDocument doc,
-        AssetStore assetStore, TunedParameters tuned, string? hwAccel, CancellationToken ct)
+        AssetStore assetStore, IReadOnlyList<ScenePlan> scenes, string? hwAccel, CancellationToken ct)
     {
-        var (startMs, endMs) = Window(plan.Members[0], info);
+        var (vStart, vEnd) = Window(plan.Members[0], info);
+        var mappings = new CanvasMapping[plan.Members.Count];
+        var bakers = new GroupTransformBaker?[plan.Members.Count];
         var buffers = new List<SbObject>[plan.Members.Count];
-        var targets = new TileEncodeLoop.EmitTarget[plan.Members.Count];
 
         for (var i = 0; i < plan.Members.Count; i++)
         {
             var v = plan.Members[i];
-            var mapping = new CanvasMapping(info.Width, info.Height, v.X, v.Y);
-            var baker = v.Commands.Count > 0
+            mappings[i] = new CanvasMapping(info.Width, info.Height, v.X, v.Y);
+            bakers[i] = v.Commands.Count > 0
                 ? new GroupTransformBaker(v.Commands, (float)v.X, (float)v.Y, plan.Key.EffectiveFps)
                 : null;
-            var buffer = buffers[i] = [];
-            targets[i] = new TileEncodeLoop.EmitTarget(mapping, v.Layer, v.StartTimeMs, baker, buffer.Add);
+            buffers[i] = [];
         }
 
-        var loopOptions = LoopOptions(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, startMs, endMs, tuned,
-            targets, hwAccel);
-        await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
+        foreach (var scene in scenes)
+        {
+            var (subStart, subEnd) = Clip(vStart, vEnd, scene);
+            if (subEnd <= subStart) continue;
+
+            var targets = new TileEncodeLoop.EmitTarget[plan.Members.Count];
+            for (var i = 0; i < plan.Members.Count; i++)
+            {
+                var v = plan.Members[i];
+                var offsetMs = v.StartTimeMs + (subStart - vStart);
+                targets[i] = new TileEncodeLoop.EmitTarget(mappings[i], v.Layer, offsetMs, bakers[i], buffers[i].Add);
+            }
+
+            var loopOptions = LoopOptions(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, subStart, subEnd,
+                scene.Tuned, targets, hwAccel);
+            await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct);
+        }
 
         foreach (var buffer in buffers)
         foreach (var o in buffer)
             doc.Add(o);
+    }
+
+    private static (double Start, double End) Clip(double vStart, double vEnd, ScenePlan scene)
+    {
+        return (Math.Max(vStart, scene.StartMs), Math.Min(vEnd, scene.EndMs));
     }
 }
