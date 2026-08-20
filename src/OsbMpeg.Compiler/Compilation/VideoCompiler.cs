@@ -151,8 +151,7 @@ public static class VideoCompiler
             var inputPath = plan.Members[0].FilePath;
             var scenes = await SceneBounds.BuildCoreAsync(
                 ct2 => ScenePrePass.ScanAsync(inputPath, info.Width, info.Height, plan.Key.EffectiveFps,
-                    plan.UnionStartMs, plan.UnionEndMs, ParameterTuner.SampleWindowMs,
-                    info.Duration.TotalMilliseconds, hwAccel, log, ct2),
+                    plan.UnionStartMs, plan.UnionEndMs, hwAccel, log, ct2),
                 Path.GetFileName(inputPath), log, ct);
             return scenesByPlan[plan] = scenes;
         }

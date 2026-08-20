@@ -4,10 +4,9 @@ using OsbMpeg.Compiler.Shared.Media;
 
 namespace OsbMpeg.Compiler.Detection;
 
-/// <summary>Cut timestamps inside the scanned window (absolute, file-relative) plus the effective
-///     [StartMs,EndMs) range actually usable for tuning — may extend past the originally requested
-///     window on either side if a margin fetch found more room before hitting a real cut (see
-///     ScanAsync's own doc comment).</summary>
+/// <summary>Cut timestamps inside the scanned window (absolute, file-relative). StartMs/EndMs
+///     always equal the requested window exactly — nothing extends past it (see the class doc
+///     comment for why an earlier margin-fetch mechanism here was removed).</summary>
 public readonly record struct ScenePrePassResult(double StartMs, double EndMs, IReadOnlyList<double> Cuts);
 
 /// <summary>
@@ -19,25 +18,24 @@ public readonly record struct ScenePrePassResult(double StartMs, double EndMs, I
 ///     that's a lagging signal that smears the one frame a cut actually is; see docs/research.md).
 ///     Decodes with a fixed baseline combo (64/32/8/0, canonical snapshot) and only runs
 ///     TileRunTracker.Advance — no QuadtreeMerger, AnimationDetector, AssetStore, or PNG writes at
-///     all, which is why this is far cheaper than a real encode (PNG encode/render was measured as
-///     the dominant cost earlier this session, not decode).
+///     all, which is why this is far cheaper than a real encode.
 ///     Window-scoped, not whole-file: an earlier version always decoded the entire source file to
 ///     find every cut it contains, even though a .osbv compile only ever needs the scenes
 ///     overlapping its own requested window — for a long file with many natural cuts this paid the
-///     cost of scenes nowhere near what was actually being tuned/encoded. ScanAsync now decodes
-///     only <paramref name="windowStartMs" />/<paramref name="windowEndMs" /> (plus, lazily, a
-///     margin past either edge — see below) instead of [0, file duration).
-///     Only two questions matter per requested window, not the scene's full true extent: (1) is
-///     there a cut *inside* the window (if so, split at it), (2) is there enough material just
-///     outside the window's own edges to give ParameterTuner a representative tuning sample (not
-///     "where does the scene truly end" — VideoCompiler's own Clip()+skip logic already intersects
-///     any reported scene bound back down to the real requested encode window regardless of how far
-///     a margin fetch extended it, so extending a boundary here never affects what actually gets
-///     encoded, only how much material tuning gets to sample from).
+///     cost of scenes nowhere near what was actually being tuned/encoded. ScanAsync decodes only
+///     <paramref name="windowStartMs" />/<paramref name="windowEndMs" />, nothing past it.
+///     No margin-fetch past the window edges (an earlier version had one, padding a short scene out
+///     to whatever sample size ParameterTuner needed): removed once ParameterTuner's own design
+///     stopped needing it — a scene no longer than ParameterTuner.RequiredSampleMs is now tuned
+///     using its own full span directly (see ParameterTuner.BuildSampleWindows), not a
+///     margin-padded stand-in for a bigger sample. Detection only ever needs to answer one
+///     question now: is there a cut *inside* this window (if so, split at it) — VideoCompiler's own
+///     Clip()+skip logic already intersects any reported scene bound back down to the real
+///     requested encode window regardless, so there was never a reason for detection itself to look
+///     past its own window's edges.
 ///     DetectCuts is the actual decision logic, split out as a pure function over
 ///     (timestamp, closed-run count) pairs so it's testable without real video decode — same split
-///     ParameterTuner already uses between ProbeAsync (I/O) and TuneCoreAsync (decision). PlanMargins
-///     is the same split for the margin-fetch decision.
+///     ParameterTuner already uses between ProbeAsync (I/O) and TuneCoreAsync (decision).
 /// </summary>
 public static class ScenePrePass
 {
@@ -81,59 +79,14 @@ public static class ScenePrePass
     /// </summary>
     internal const double MinSceneMs = 1000;
 
-    /// <param name="requiredSampleMs">
-    ///     How much material ParameterTuner's own sample needs (see its SampleWindowMs) — the
-    ///     margin-fetch budget, not a detection constant. Caller-supplied so Detection doesn't need
-    ///     to know anything about Tuning's internals beyond this one number.
-    /// </param>
-    /// <param name="fileDurationMs">Caps a trailing margin fetch from running past the real end of
-    ///     the source file.</param>
     public static async Task<ScenePrePassResult> ScanAsync(string inputPath, int width, int height, double fps,
-        double windowStartMs, double windowEndMs, double requiredSampleMs, double fileDurationMs, string? hwAccel,
-        Action<string>? log, CancellationToken ct)
+        double windowStartMs, double windowEndMs, string? hwAccel, Action<string>? log, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        var tileCount = new TileGrid(width, height, BaselineTileSize).TileCount;
-
-        var mainSamples = await ScanRangeAsync(inputPath, width, height, fps, windowStartMs,
-            windowEndMs - windowStartMs, hwAccel, ct);
-        var cuts = DetectCuts(mainSamples, tileCount);
-
-        var margins = PlanMargins(windowStartMs, windowEndMs, cuts, requiredSampleMs, fileDurationMs);
-
-        var effectiveStart = windowStartMs;
-        if (margins.LeadInStartMs is { } leadInStart)
-        {
-            var leadSamples = await ScanRangeAsync(inputPath, width, height, fps, leadInStart,
-                windowStartMs - leadInStart, hwAccel, ct);
-            var leadCuts = DetectCuts(leadSamples, tileCount);
-            // A cut inside the margin is a real scene boundary -- stop there, don't cross it, even
-            // though it means this window ends up with less extra material than requested.
-            effectiveStart = leadCuts.Count > 0 ? leadCuts[^1] : leadInStart;
-        }
-
-        var effectiveEnd = windowEndMs;
-        if (margins.TrailOutEndMs is { } trailOutEnd)
-        {
-            var trailSamples = await ScanRangeAsync(inputPath, width, height, fps, windowEndMs,
-                trailOutEnd - windowEndMs, hwAccel, ct);
-            var trailCuts = DetectCuts(trailSamples, tileCount);
-            effectiveEnd = trailCuts.Count > 0 ? trailCuts[0] : trailOutEnd;
-        }
-
-        log?.Invoke($"scene prepass {Path.GetFileName(inputPath)}: {sw.ElapsedMilliseconds}ms, " +
-                    $"window=[{windowStartMs:F0},{windowEndMs:F0}) effective=[{effectiveStart:F0},{effectiveEnd:F0}), " +
-                    $"{cuts.Count} internal cut(s)");
-        return new ScenePrePassResult(effectiveStart, effectiveEnd, cuts);
-    }
-
-    private static async Task<List<(double Ms, int ClosedCount)>> ScanRangeAsync(string inputPath, int width,
-        int height, double fps, double startMs, double durationMs, string? hwAccel, CancellationToken ct)
-    {
         var grid = new TileGrid(width, height, BaselineTileSize);
         var tracker = new TileRunTracker(grid, BaselineHashQuantLevels, true, BaselineTileTolerance);
         var frameOpts = new FrameSourceOptions(width, height, fps,
-            TimeSpan.FromMilliseconds(startMs), TimeSpan.FromMilliseconds(durationMs),
+            TimeSpan.FromMilliseconds(windowStartMs), TimeSpan.FromMilliseconds(windowEndMs - windowStartMs),
             hwAccel is { } hw ? $"-hwaccel {hw}" : null);
 
         var samples = new List<(double Ms, int ClosedCount)>();
@@ -141,15 +94,17 @@ public static class ScenePrePass
             using (frame)
             {
                 // VideoFrame.Pts is always 0-based within its own decode's output stream regardless
-                // of the -ss seek above (confirmed at FrameSource.cs) -- add startMs back to land on
-                // an absolute, file-relative timestamp, same as VideoCompiler already does for
-                // encode-side sub-window offsets.
-                var ms = startMs + frame.Pts * 1000.0;
+                // of the -ss seek above (confirmed at FrameSource.cs) -- add windowStartMs back to
+                // land on an absolute, file-relative timestamp.
+                var ms = windowStartMs + frame.Pts * 1000.0;
                 var closed = tracker.Advance(frame, ms);
                 samples.Add((ms, closed.Count));
             }
 
-        return samples;
+        var cuts = DetectCuts(samples, grid.TileCount);
+        log?.Invoke($"scene prepass {Path.GetFileName(inputPath)}: {sw.ElapsedMilliseconds}ms, " +
+                    $"window=[{windowStartMs:F0},{windowEndMs:F0}), {cuts.Count} internal cut(s)");
+        return new ScenePrePassResult(windowStartMs, windowEndMs, cuts);
     }
 
     internal static List<double> DetectCuts(IEnumerable<(double Ms, int ClosedCount)> frames, int tileCount)
@@ -192,45 +147,5 @@ public static class ScenePrePass
         }
 
         return cuts;
-    }
-
-    internal readonly record struct MarginPlan(double? LeadInStartMs, double? TrailOutEndMs);
-
-    /// <summary>
-    ///     Decides whether the window's first and/or last sub-window (split at any internal cuts
-    ///     already found) has enough material for a <paramref name="requiredSampleMs" /> tuning
-    ///     sample, and if not, how far out to look for more — outward from the *original* window's
-    ///     own outer edges only, never past an internal cut (that's a known, different scene
-    ///     already). Pure function, no decode — testable with a synthetic cut list.
-    ///     ponytail: when the window has zero internal cuts, both checks reduce to the same "whole
-    ///     window too short" condition and both margins get requested independently rather than
-    ///     fetching one side first and rechecking — a real but small inefficiency (worst case
-    ///     ~2*requiredSampleMs of extra decode instead of the true minimum), acceptable while
-    ///     requiredSampleMs is still a placeholder (see ScanAsync's own param doc). Revisit if C's
-    ///     real sample-size design makes this budget large enough to matter.
-    /// </summary>
-    internal static MarginPlan PlanMargins(double windowStartMs, double windowEndMs, IReadOnlyList<double> cuts,
-        double requiredSampleMs, double fileDurationMs)
-    {
-        double? leadInStart = null;
-        double? trailOutEnd = null;
-
-        var firstSubEnd = cuts.Count > 0 ? cuts[0] : windowEndMs;
-        if (firstSubEnd - windowStartMs < requiredSampleMs)
-        {
-            var deficit = requiredSampleMs - (firstSubEnd - windowStartMs);
-            var candidate = Math.Max(0, windowStartMs - deficit);
-            if (candidate < windowStartMs) leadInStart = candidate;
-        }
-
-        var lastSubStart = cuts.Count > 0 ? cuts[^1] : windowStartMs;
-        if (windowEndMs - lastSubStart < requiredSampleMs)
-        {
-            var deficit = requiredSampleMs - (windowEndMs - lastSubStart);
-            var candidate = Math.Min(fileDurationMs, windowEndMs + deficit);
-            if (candidate > windowEndMs) trailOutEnd = candidate;
-        }
-
-        return new MarginPlan(leadInStart, trailOutEnd);
     }
 }

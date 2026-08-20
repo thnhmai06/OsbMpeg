@@ -14,12 +14,23 @@ public sealed record TunedParameters(int TileSize, int HashQuantLevels, int Tile
 ///     "auto-tune" means "as cheap as possible without losing what today's hardcoded combo already
 ///     delivers," not quality-maximization for its own sake.
 ///     Target is self-calibrating, not an absolute PSNR constant: probe once at today's own
-///     defaults (TileSize=64, HashQuantLevels=32, TileTolerance=8, Colors=0) on a short sample
-///     window, use that PSNR (minus <see cref="TargetSlackDb" />) as the floor every candidate must
-///     clear. A hard zero-slack floor would make every lossy-but-cheaper candidate (any Colors
-///     quantization, any TileTolerance above the baseline's own 8) score below the baseline by
-///     construction and never win — the slack is what lets the search actually find something
-///     cheaper instead of always falling back to the baseline it started from.
+///     defaults (TileSize=64, HashQuantLevels=32, TileTolerance=8, Colors=0) on the train samples
+///     (see below), use that PSNR (minus <see cref="TargetSlackDb" />) as the floor every candidate
+///     must clear on *both* train and eval. A hard zero-slack floor would make every
+///     lossy-but-cheaper candidate (any Colors quantization, any TileTolerance above the baseline's
+///     own 8) score below the baseline by construction and never win — the slack is what lets the
+///     search actually find something cheaper instead of always falling back to the baseline it
+///     started from.
+///     Train/eval split, not one sample: a single probe window can overfit a candidate to whatever
+///     that one clip happens to look like — a combo that wins on the sampled clip might cost far
+///     more (or look far worse) on the rest of the scene. Each candidate is probed against 3 short
+///     train windows spread across the scene (whose combined PSNR/cost drives the search, same
+///     role the old single sample played) *and* 1 held-out eval window elsewhere in the scene the
+///     candidate never sees during selection — a candidate only counts as "passing the floor" if
+///     both its train PSNR and its eval PSNR clear it (<see cref="Select" />), so a combo that
+///     looks great on train but craters on unseen material gets rejected the same as one that never
+///     met the floor at all. See <see cref="BuildSampleWindows" /> for exactly how the 4 windows are
+///     placed.
 ///     Coordinate descent, not a 4D grid: a full grid at 3-4 candidates per axis is 81-625 probes
 ///     per source, too expensive (each probe re-runs the tile-grid encoder + software renderer over
 ///     a real decode). One pass, axes ordered biggest-lever-first: TileSize (changes every tile
@@ -34,23 +45,38 @@ public sealed record TunedParameters(int TileSize, int HashQuantLevels, int Tile
 ///     needed on the reconstructed side). Source frames for the comparison are captured via
 ///     TileEncodeLoop.RunAsync's onFrame hook as it decodes them for its own purposes, instead of
 ///     decoding the same short window a second time afterward — a real, measured cost this design
-///     initially missed: the first end-to-end run (before this) spent ~5.5 minutes tuning one
-///     10s/720p source (28 ffmpeg spawns for 14 probes) against a ~30-90s estimate; capturing
-///     frames during the encode's own decode instead of a separate pass halves that. Each
-///     candidate writes its throwaway PNGs to a fresh temp dir, deleted immediately after — never
-///     touches the real, persistent, content-addressed AssetStore (see AssetStore.cs's own doc
-///     comment: a different TileSize hashes completely differently anyway, so there's no reuse to
-///     be had during search, only pollution to avoid).
+///     initially missed. Each candidate writes its throwaway PNGs to an in-memory AssetStore (see
+///     AssetStore.cs's own doc comment on `inMemory`) — never touches the real, persistent,
+///     content-addressed store: a different TileSize hashes completely differently anyway, so
+///     there's no reuse to be had during search, only pollution to avoid.
 /// </summary>
 public static class ParameterTuner
 {
     private const double TargetSlackDb = 1.0;
     private const double BytesPerCommandEstimate = 100; // fish_spin_test: 44.63KB / 445 commands ≈ 100.3, this session
-    // Also used by Detection (ScenePrePass's margin-fetch, via VideoCompiler) as the "how much
-    // material does one scene's tuning sample need" placeholder -- real cost measured ~2x
-    // SoftwareStoryboardRenderer render time vs. encode time at 4000ms — see docs/research.md.
-    // Not re-benchmarked since; revisit once a real train/val/test sampling design exists.
-    internal const double SampleWindowMs = 1500;
+
+    /// <summary>
+    ///     Total width of the one local sample block <see cref="BuildSampleWindows" /> carves into 4
+    ///     contiguous train/eval chunks — also used by Detection (ScenePrePass's margin-fetch, via
+    ///     VideoCompiler) as the "how much material does one scene's tuning sample need" input, so a
+    ///     scene too short for this gets padded by a margin fetch before TuneAsync ever runs (see
+    ///     ScenePrePass.cs). Up from the single-sample design's 1500ms — the eval chunk is a real
+    ///     added cost, not free visibility.
+    ///     Deliberately one contiguous local block, not spread across the whole scene: an earlier
+    ///     version placed the 4 samples in 4 quarters spanning the *entire* scene, which meant the
+    ///     baseline probe (whichever content those quarters happened to average over) could measure
+    ///     meaningfully higher or lower quality than the old single-anchored-sample design ever did —
+    ///     shifting the whole floor (baseline PSNR - TargetSlackDb) up or down by several dB purely
+    ///     from sampling different content, not from any candidate actually being better or worse.
+    ///     Measured on a real fixture: this produced baseline PSNR 3+dB higher than a same-content
+    ///     single-sample run, which pushed the floor high enough that almost every cheaper candidate
+    ///     failed it — total output bytes +18.9% and tuning ~2x slower on the same real scene,
+    ///     despite the mechanism "working as designed." Keeping train+eval within one local
+    ///     neighborhood (same place the old single sample was drawn from) keeps the floor comparable
+    ///     to what it always measured, while still giving the overfitting gate real held-out material
+    ///     to check against.
+    /// </summary>
+    internal const double RequiredSampleMs = 3000;
 
     private static readonly int[] TileSizeCandidates = [64, 128, 256];
     private static readonly int[] ColorsCandidates = [0, 32, 16];
@@ -63,41 +89,74 @@ public static class ParameterTuner
     ///     VideoCompiler's own scene list, anchored to the whole file), not the calling .osbv
     ///     project's own window. A video with no detected scene cuts is exactly one segment spanning
     ///     [0, duration) with <paramref name="isFirstSegment" />=true — the general form this always
-    ///     was, not a parallel path (this API used to be file-duration-centered with no segment
-    ///     concept; that behavior is reproduced exactly by that one-segment case).
-    ///     The first segment samples a window centered within itself, same as the old whole-file
-    ///     design, to avoid an atypical intro/title-card. Every later segment (which always starts
-    ///     right after a real cut) samples starting at its own beginning instead —
-    ///     anchoring there folds that segment's own one-time full-canvas re-emit cost into its own
-    ///     probe; a mid-segment sample would never see it, silently under-costing a big TileSize
-    ///     candidate that looks cheap in isolation but is expensive specifically at the cut it owns.
+    ///     was, not a parallel path.
     /// </summary>
     public static async Task<TunedParameters> TuneAsync(string inputPath, MediaInfo info, double fps,
         double segmentStartMs, double segmentEndMs, bool isFirstSegment, string? hwAccel, Action<string>? log,
         CancellationToken ct)
     {
-        var segmentDurationMs = segmentEndMs - segmentStartMs;
-        var sampleDurationMs = Math.Min(SampleWindowMs, segmentDurationMs);
-        var sampleStartMs = isFirstSegment
-            ? segmentStartMs + Math.Max(0, (segmentDurationMs - sampleDurationMs) / 2)
-            : segmentStartMs;
+        var (trainWindows, evalWindow) =
+            BuildSampleWindows(segmentStartMs, segmentEndMs - segmentStartMs, isFirstSegment);
 
         return await TuneCoreAsync(
             (tileSize, hashQuantLevels, tileTolerance, colors) =>
-                ProbeAsync(inputPath, info, fps, sampleStartMs, sampleDurationMs, tileSize, hashQuantLevels,
+                ProbeTrainEvalAsync(inputPath, info, fps, trainWindows, evalWindow, tileSize, hashQuantLevels,
                     tileTolerance, colors, hwAccel, ct),
             Path.GetFileName(inputPath), log);
     }
 
     /// <summary>
+    ///     Two cases. A scene no longer than <see cref="RequiredSampleMs" /> *is* the whole
+    ///     deliverable, not a sample standing in for something bigger — there's no "unseen data" to
+    ///     hold out when 100% of what exists already gets used, so overfitting to it isn't a risk to
+    ///     guard against, it's the goal (a combo tuned as tightly as possible to exactly this
+    ///     content). That scene's entire span becomes the one and only window, returned as both the
+    ///     single train window and the eval window — <see cref="ProbeTrainEvalAsync" /> recognizes
+    ///     the identical window and skips probing it twice, and <see cref="Select" />'s
+    ///     `train.Psnr >= floor &amp;&amp; eval.Psnr >= floor` gate degrades to just the train check
+    ///     for free (same value on both sides) without any special-casing in the gate itself.
+    ///     Longer scenes place one local <see cref="RequiredSampleMs" />-wide block — positioned
+    ///     exactly like the old single-sample design's own window (first segment overall: centered
+    ///     within the segment, to avoid an atypical intro/title-card; every later segment: anchored
+    ///     at the segment's own start, to fold that segment's one-time full-canvas re-emit cost into
+    ///     what gets measured) — then splits that block into 4 equal, contiguous chunks: chunks 0, 1,
+    ///     3 become the train windows (their combined PSNR/cost drives the search), chunk 2 becomes
+    ///     the held-out eval window. All 4 chunks come from the same local neighborhood deliberately
+    ///     (see <see cref="RequiredSampleMs" />'s own doc comment for the real regression measured
+    ///     when they were spread across the whole scene instead).
+    ///     Pure function, no decode — testable with synthetic segment bounds.
+    /// </summary>
+    internal static ((double Start, double DurationMs)[] Train, (double Start, double DurationMs) Eval)
+        BuildSampleWindows(double segmentStartMs, double segmentDurationMs, bool isFirstSegment)
+    {
+        if (segmentDurationMs <= RequiredSampleMs)
+        {
+            var whole = (segmentStartMs, segmentDurationMs);
+            return (new[] { whole }, whole);
+        }
+
+        var blockStart = isFirstSegment
+            ? segmentStartMs + Math.Max(0, (segmentDurationMs - RequiredSampleMs) / 2.0)
+            : segmentStartMs;
+
+        var chunkMs = RequiredSampleMs / 4.0;
+        double ChunkStart(int i) => blockStart + chunkMs * i;
+
+        var train = new[] { (ChunkStart(0), chunkMs), (ChunkStart(1), chunkMs), (ChunkStart(3), chunkMs) };
+        var eval = (ChunkStart(2), chunkMs);
+        return (train, eval);
+    }
+
+    /// <summary>
     ///     The search itself, independent of ffmpeg/rendering — <paramref name="probe" /> is
     ///     injected (same pattern as <c>VideoSourcePlanner.PlanAsync</c>'s injected probe delegate)
-    ///     so the coordinate-descent decision logic (slack floor, cost comparison, fallback-to-best,
-    ///     probe budget) is testable with synthetic <see cref="ProbeResult" />s, no real video decode
-    ///     needed.
+    ///     so the coordinate-descent decision logic (slack floor, train/eval gate, cost comparison,
+    ///     fallback-to-best, probe budget) is testable with synthetic <see cref="ProbeResult" />
+    ///     pairs, no real video decode needed.
     /// </summary>
     internal static async Task<TunedParameters> TuneCoreAsync(
-        Func<int, int, int, int, Task<ProbeResult>> probe, string label, Action<string>? log)
+        Func<int, int, int, int, Task<(ProbeResult Train, ProbeResult Eval)>> probe, string label,
+        Action<string>? log)
     {
         var hashQuantLevels = 32;
         var tileTolerance = 8;
@@ -106,21 +165,22 @@ public static class ParameterTuner
         // TileSize=64 with the other 3 params at their defaults IS today's baseline combo, and
         // it's already one of TileSizeCandidates — probe the whole axis in one concurrent batch
         // and pull the baseline out of whichever result comes back for value 64, instead of a
-        // separate blocking probe that used to run in front of this axis (re-probing that exact
-        // same (64,32,8,0) tuple a second time before the axis's own sweep even started).
+        // separate blocking probe that used to run in front of this axis.
         var tileSizeResults = await Task.WhenAll(
             TileSizeCandidates.Select(v => probe(v, hashQuantLevels, tileTolerance, colors)));
         var baseline = tileSizeResults[Array.IndexOf(TileSizeCandidates, 64)];
-        var floor = baseline.Psnr - TargetSlackDb;
-        log?.Invoke($"tuning {label}: baseline PSNR={baseline.Psnr:F2}dB, floor={floor:F2}dB");
+        var floor = baseline.Train.Psnr - TargetSlackDb;
+        log?.Invoke($"tuning {label}: baseline train PSNR={baseline.Train.Psnr:F2}dB " +
+                    $"eval PSNR={baseline.Eval.Psnr:F2}dB, floor={floor:F2}dB");
 
         var (tileSize, tileSizeWin, _) =
             Select(TileSizeCandidates, tileSizeResults, floor, 64, log, "tileSize");
 
         // Every later axis's "unchanged" candidate — the value already fixed on entry — probes
         // the exact same tuple the previous axis's own winning candidate already resolved (same
-        // params, nothing new varies). Carry that ProbeResult forward as a seed so BestAsync
-        // skips re-probing it instead of paying for the same deterministic combo twice.
+        // params, nothing new varies). Carry that pair forward as a seed so BestAsync skips
+        // re-probing it instead of paying for the same deterministic combo (now 4 real decodes,
+        // not 1) twice.
         var (colorsChosen, colorsWin, _) = await BestAsync(ColorsCandidates,
             v => probe(tileSize, hashQuantLevels, tileTolerance, v), floor, colors, tileSizeWin, log, nameof(colors));
 
@@ -135,40 +195,42 @@ public static class ParameterTuner
         if (!metFloor)
         {
             log?.Invoke(
-                $"tuning {label}: no combo met the floor ({floor:F2}dB) — falling back to baseline defaults");
+                $"tuning {label}: no combo met the floor ({floor:F2}dB) on both train and eval — falling back to baseline defaults");
             return new TunedParameters(64, 32, 8, 0);
         }
 
         log?.Invoke(
             $"tuning {label}: chosen TileSize={tileSize} HashQuantLevels={hashQuantChosen} " +
-            $"TileTolerance={toleranceChosen} Colors={colorsChosen} (baseline PSNR={baseline.Psnr:F2}dB)");
+            $"TileTolerance={toleranceChosen} Colors={colorsChosen} (baseline train PSNR={baseline.Train.Psnr:F2}dB)");
         return new TunedParameters(tileSize, hashQuantChosen, toleranceChosen, colorsChosen);
     }
 
     /// <summary>
     ///     Probes every candidate except <paramref name="current" /> — that one's result is
-    ///     already known (<paramref name="seed" />, the previous axis's own winning probe, which
-    ///     necessarily used the exact same tuple this axis's unchanged candidate would probe
+    ///     already known (<paramref name="seed" />, the previous axis's own winning probe pair,
+    ///     which necessarily used the exact same tuple this axis's unchanged candidate would probe
     ///     again) — then hands the assembled results to <see cref="Select" />.
-    ///     Candidates within one axis are independent (each writes to its own throwaway temp dir,
-    ///     no shared mutable state), so they run concurrently via Task.WhenAll rather than one at a
-    ///     time — axes still run sequentially against each other (each one's candidates need the
-    ///     previous axis's chosen value), but this is the one place probes can overlap without
-    ///     changing what the search decides.
+    ///     Candidates within one axis are independent (each writes to its own throwaway in-memory
+    ///     store, no shared mutable state), so they run concurrently via Task.WhenAll — the 4
+    ///     sub-probes (3 train + 1 eval) *within* one candidate run sequentially instead (see
+    ///     ProbeTrainEvalAsync), deliberately not fanned out further: candidates-within-an-axis
+    ///     concurrency is what this session already measured as the safe amount of parallel ffmpeg
+    ///     load (see docs/research.md's per-scene tuning entries) — adding a second layer of
+    ///     concurrency here would multiply concurrent decodes past that, not add real throughput.
     /// </summary>
-    private static async Task<(int Value, ProbeResult Result, bool MetFloor)> BestAsync(int[] candidates,
-        Func<int, Task<ProbeResult>> probe, double floor, int current, ProbeResult seed, Action<string>? log,
-        string axisName)
+    private static async Task<(int Value, (ProbeResult Train, ProbeResult Eval) Result, bool MetFloor)> BestAsync(
+        int[] candidates, Func<int, Task<(ProbeResult Train, ProbeResult Eval)>> probe, double floor, int current,
+        (ProbeResult Train, ProbeResult Eval) seed, Action<string>? log, string axisName)
     {
         var seedIndex = Array.IndexOf(candidates, current);
-        var tasks = new Task<ProbeResult>?[candidates.Length];
+        var tasks = new Task<(ProbeResult Train, ProbeResult Eval)>?[candidates.Length];
         for (var i = 0; i < candidates.Length; i++)
             if (i != seedIndex)
                 tasks[i] = probe(candidates[i]);
 
         await Task.WhenAll(tasks.Where(t => t is not null)!);
 
-        var results = new ProbeResult[candidates.Length];
+        var results = new (ProbeResult Train, ProbeResult Eval)[candidates.Length];
         for (var i = 0; i < candidates.Length; i++)
             results[i] = i == seedIndex ? seed : tasks[i]!.Result;
 
@@ -176,38 +238,43 @@ public static class ParameterTuner
     }
 
     /// <summary>
-    ///     Picks the candidate with the smallest combined cost among those meeting
-    ///     <paramref name="floor" />; if none do, falls back to the highest-PSNR candidate (a later
-    ///     axis may still recover the target) and reports <c>MetFloor: false</c> so the caller knows
-    ///     this axis's own contribution never actually cleared the bar. Task.WhenAll (in
-    ///     <see cref="BestAsync" />) preserves input order in its result array regardless of
-    ///     completion order, so tie-breaking (first-seen-wins on equal cost) is unaffected by
-    ///     probing concurrently.
+    ///     Picks the candidate with the smallest train cost among those where *both* train and eval
+    ///     PSNR meet <paramref name="floor" /> — a candidate that only clears the floor on train is
+    ///     treated as failing, the same as one that never cleared it on either (this is the actual
+    ///     overfitting guard: a combo the search would otherwise love because it looks great on the
+    ///     3 windows it got tuned against, but whose PSNR collapses on the 4th window it never saw,
+    ///     doesn't get to win just because train alone looked good). If none pass, falls back to the
+    ///     highest-train-PSNR candidate (a later axis may still recover the target) and reports
+    ///     <c>MetFloor: false</c>.
     /// </summary>
-    private static (int Value, ProbeResult Result, bool MetFloor) Select(int[] candidates, ProbeResult[] results,
-        double floor, int current, Action<string>? log, string axisName)
+    private static (int Value, (ProbeResult Train, ProbeResult Eval) Result, bool MetFloor) Select(
+        int[] candidates, (ProbeResult Train, ProbeResult Eval)[] results, double floor, int current,
+        Action<string>? log, string axisName)
     {
-        ProbeResult? bestPassing = null;
+        (ProbeResult Train, ProbeResult Eval)? bestPassing = null;
         var bestPassingValue = current;
-        ProbeResult? bestOverall = null;
+        (ProbeResult Train, ProbeResult Eval)? bestOverall = null;
         var bestOverallValue = current;
 
         for (var i = 0; i < candidates.Length; i++)
         {
             var candidate = candidates[i];
-            var result = results[i];
-            log?.Invoke($"  {axisName}={candidate}: PSNR={result.Psnr:F2}dB cost={result.Cost:F0} " +
-                        $"took={result.ElapsedMs}ms (decode={result.DecodeMs}ms render+psnr={result.RenderMs}ms objects={result.ObjectCount})");
+            var (train, eval) = results[i];
+            log?.Invoke($"  {axisName}={candidate}: trainPSNR={train.Psnr:F2}dB evalPSNR={eval.Psnr:F2}dB " +
+                        $"cost={train.Cost:F0} took={train.ElapsedMs + eval.ElapsedMs}ms " +
+                        $"(decode={train.DecodeMs + eval.DecodeMs}ms render+psnr={train.RenderMs + eval.RenderMs}ms " +
+                        $"objects={train.ObjectCount + eval.ObjectCount})");
 
-            if (bestOverall is null || result.Psnr > bestOverall.Value.Psnr)
+            if (bestOverall is null || train.Psnr > bestOverall.Value.Train.Psnr)
             {
-                bestOverall = result;
+                bestOverall = (train, eval);
                 bestOverallValue = candidate;
             }
 
-            if (result.Psnr >= floor && (bestPassing is null || result.Cost < bestPassing.Value.Cost))
+            var passesBoth = train.Psnr >= floor && eval.Psnr >= floor;
+            if (passesBoth && (bestPassing is null || train.Cost < bestPassing.Value.Train.Cost))
             {
-                bestPassing = result;
+                bestPassing = (train, eval);
                 bestPassingValue = candidate;
             }
         }
@@ -221,6 +288,42 @@ public static class ParameterTuner
         long DecodeMs = 0, long RenderMs = 0, int ObjectCount = 0)
     {
         public double Cost => AssetBytes + CommandCount * BytesPerCommandEstimate;
+    }
+
+    /// <summary>
+    ///     Runs the 3 train probes plus the 1 eval probe for one candidate tuple, sequentially (see
+    ///     BestAsync's own doc comment on why not concurrently), and folds the 3 train results into
+    ///     one aggregate (<see cref="ProbeResult.Psnr" /> averaged — representative quality across
+    ///     the 3 windows; bytes/commands summed — representative of what this candidate would
+    ///     actually cost applied across material like this).
+    /// </summary>
+    private static async Task<(ProbeResult Train, ProbeResult Eval)> ProbeTrainEvalAsync(string inputPath,
+        MediaInfo info, double fps, (double Start, double DurationMs)[] trainWindows,
+        (double Start, double DurationMs) evalWindow, int tileSize, int hashQuantLevels, int tileTolerance,
+        int colors, string? hwAccel, CancellationToken ct)
+    {
+        var trainResults = new ProbeResult[trainWindows.Length];
+        for (var i = 0; i < trainWindows.Length; i++)
+            trainResults[i] = await ProbeAsync(inputPath, info, fps, trainWindows[i].Start,
+                trainWindows[i].DurationMs, tileSize, hashQuantLevels, tileTolerance, colors, hwAccel, ct);
+
+        // Short-scene case (see BuildSampleWindows): eval is the exact same window as the one and
+        // only train window -- probing it a second time would just re-decode identical data for an
+        // identical number. Reuse train's own result instead.
+        var evalResult = trainWindows.Length == 1 && trainWindows[0] == evalWindow
+            ? trainResults[0]
+            : await ProbeAsync(inputPath, info, fps, evalWindow.Start, evalWindow.DurationMs, tileSize,
+                hashQuantLevels, tileTolerance, colors, hwAccel, ct);
+
+        var train = new ProbeResult(
+            trainResults.Average(r => r.Psnr),
+            trainResults.Sum(r => r.AssetBytes),
+            trainResults.Sum(r => r.CommandCount),
+            trainResults.Sum(r => r.ElapsedMs),
+            trainResults.Sum(r => r.DecodeMs),
+            trainResults.Sum(r => r.RenderMs),
+            trainResults.Sum(r => r.ObjectCount));
+        return (train, evalResult);
     }
 
     private static async Task<ProbeResult> ProbeAsync(string inputPath, MediaInfo info, double fps,
@@ -245,9 +348,7 @@ public static class ParameterTuner
 
         // Capture each source frame's pixels as TileEncodeLoop decodes them for its own
         // purposes, instead of decoding the same short window a second time afterward just
-        // for comparison — halves the ffmpeg process count per probe (this was the dominant
-        // cost the first time this ran: 28 ffmpeg spawns for a 14-probe tuning pass, ~5.5
-        // minutes for one 10s/720p source against a ~30-90s estimate).
+        // for comparison — halves the ffmpeg process count per probe.
         var decodeSw = System.Diagnostics.Stopwatch.StartNew();
         var sourceFrames = new List<byte[]>();
         await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct,

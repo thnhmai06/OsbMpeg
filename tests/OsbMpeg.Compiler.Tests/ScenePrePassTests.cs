@@ -100,54 +100,8 @@ public class ScenePrePassTests
         Assert.Empty(cuts);
     }
 
-    [Fact]
-    public void PlanMargins_WindowAlreadyLongEnough_NoMarginRequested()
-    {
-        // Window is 10000ms, requiredSampleMs is 1500 -- plenty already, no internal cuts.
-        var plan = ScenePrePass.PlanMargins(0, 10000, [], 1500, 100000);
-
-        Assert.Null(plan.LeadInStartMs);
-        Assert.Null(plan.TrailOutEndMs);
-    }
-
-    [Fact]
-    public void PlanMargins_ShortWindowNoInternalCuts_RequestsBothMargins()
-    {
-        // Window is only 500ms, well under requiredSampleMs -- both edges are "outer" edges here
-        // (no internal cut splits it), so both get a margin request (see PlanMargins' own doc
-        // comment on why this over-fetches slightly rather than sequencing the two checks).
-        var plan = ScenePrePass.PlanMargins(10000, 10500, [], 1500, 100000);
-
-        Assert.Equal(9000, plan.LeadInStartMs); // 10000 - (1500 - 500)
-        Assert.Equal(11500, plan.TrailOutEndMs); // 10500 + (1500 - 500)
-    }
-
-    [Fact]
-    public void PlanMargins_LeadInCappedAtZero_NeverRequestsBeforeFileStart()
-    {
-        var plan = ScenePrePass.PlanMargins(500, 1000, [], 1500, 100000);
-
-        Assert.Equal(0, plan.LeadInStartMs); // would be 500-1000=-500, clamped to 0
-    }
-
-    [Fact]
-    public void PlanMargins_TrailOutCappedAtFileDuration_NeverRequestsPastFileEnd()
-    {
-        var plan = ScenePrePass.PlanMargins(98500, 99000, [], 1500, 99500);
-
-        Assert.Equal(99500, plan.TrailOutEndMs); // would be 99000+1000=100000, clamped to 99500
-    }
-
-    [Fact]
-    public void PlanMargins_InternalCutSplitsWindow_OnlyOuterEdgesConsidered()
-    {
-        // Window [0,10000) with one internal cut at 9800 -> sub-windows [0,9800) (plenty long) and
-        // [9800,10000) (only 200ms, short) -- only the trailing edge needs a margin, and the
-        // leading edge is measured against the FIRST sub-window (0..9800, already long enough),
-        // not against the whole window.
-        var plan = ScenePrePass.PlanMargins(0, 10000, [9800], 1500, 100000);
-
-        Assert.Null(plan.LeadInStartMs);
-        Assert.Equal(11300, plan.TrailOutEndMs); // 10000 + (1500 - 200)
-    }
+    // Margin-fetch (PlanMargins) was removed -- ParameterTuner no longer needs Detection to pad a
+    // short scene out to a fixed sample size (see ScenePrePass.cs's own doc comment and
+    // ParameterTuner.BuildSampleWindows for why: a scene no longer than RequiredSampleMs is now
+    // tuned using its own full span directly, not a margin-padded stand-in).
 }

@@ -34,25 +34,10 @@ public class SceneBoundsTests
         Assert.All(scenes, s => Assert.Null(s.Tuned));
     }
 
-    [Fact]
-    public async Task EffectiveRangeWiderThanOriginalWindow_ScenesSpanTheEffectiveRange()
-    {
-        // A margin fetch (ScenePrePass.ScanAsync) can report an effective range wider than the
-        // originally requested window -- BuildCoreAsync just trusts whatever range scan() reports,
-        // it doesn't know or care that it came from a margin extension.
-        var scenes = await SceneBounds.BuildCoreAsync(
-            _ => Task.FromResult(new ScenePrePassResult(8500, 11500, [])),
-            "test", null, CancellationToken.None);
-
-        var scene = Assert.Single(scenes);
-        Assert.Equal(8500, scene.StartMs);
-        Assert.Equal(11500, scene.EndMs);
-    }
-
-    // ScenePrePass.ScanAsync (the real, non-injected decode + margin fetch) and VideoCompiler's
-    // lazy per-scene tuning both call real decode/ParameterTuner, so they're covered by this
-    // feature's real end-to-end verification (docs/research.md), not a fast unit test here -- no
-    // scenes.json exists to fake a cache hit against anymore (persistence was dropped on request:
-    // it left a side file next to the real PNG assets a project ships, in exchange for cross-run
-    // reuse this tool's one-shot usage pattern doesn't actually want).
+    // ScenePrePass.ScanAsync (the real, non-injected decode) and VideoCompiler's lazy per-scene
+    // tuning both call real decode/ParameterTuner, so they're covered by this feature's real
+    // end-to-end verification (docs/research.md), not a fast unit test here -- no scenes.json
+    // exists to fake a cache hit against anymore (persistence was dropped on request: it left a
+    // side file next to the real PNG assets a project ships, in exchange for cross-run reuse this
+    // tool's one-shot usage pattern doesn't actually want).
 }
