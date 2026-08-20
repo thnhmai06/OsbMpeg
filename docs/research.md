@@ -346,3 +346,113 @@ another real cut is correct behavior for this feature, not noise).
   supports) instead of storing one PNG per distinct color variant of the same shape — simpler in kind
   than the residual-coding idea above (a single uniform multiply per instance, not per-pixel signed
   alpha).
+
+## Three-system split, window-scoped detection, global asset store, train/eval tuning
+
+Follow-up work after the findings above, driven by three architectural concerns raised in the same
+session: scene detection re-decoding whole files for narrow queries, asset storage scoped too
+tightly to dedupe across fps/files, and a single 1.5s tuning sample risking overfit to whatever that
+one clip looked like. Decomposed into three ordered, independent parts (B → A → C).
+
+### Part B — `Detection`/`Tuning`/`Encode`/`Shared` folder split; window-scoped `ScenePrePass`
+
+Folder restructure: `Compiler`'s flat `Analysis`/`Encoder`/`Media`/`Osb`/`Render`/`Evaluation`/
+`Tuning` layout regrouped into 3 system folders (`Detection`, `Tuning`, `Encode`) plus `Shared`
+(infrastructure both systems call — `Analysis`/`Media`/`Render`/`Evaluation` subfolders) and
+`Compilation` (the orchestrator, deliberately outside all three — it composes them, doesn't belong to
+one). Pure move + namespace rename, zero behavior change, verified via full `using`/qualified-
+reference grep before moving (zero type-name collisions across the `Encoder`+`Osb` merge into
+`Encode`).
+
+Behavior change landed in the same pass: `ScenePrePass.ScanAsync` previously decoded the entire
+source file to find every cut it contains, even though one `.osbv` compile only ever needs the scenes
+overlapping its own requested window (`VideoSourcePlan.UnionStartMs/UnionEndMs`, already computed,
+just not passed down). Scoped `ScanAsync` to `[windowStartMs, windowEndMs)` — for a long file with
+many natural cuts far outside the requested window, this stops paying to decode content nowhere near
+what's actually being tuned/encoded. `SceneCache`'s two thin orchestration wrappers
+(`BuildAsync`/`EnsureTunedAsync`) were deleted in the same move; the real logic they wrapped
+(`ScenePlan` record, `BuildCoreAsync` — cut-list → scene-boundary, pure and unit-tested via an
+injected scan delegate) moved into `Detection/SceneBounds.cs`, called directly by
+`VideoCompiler.ScenesFor`/`TunedFor` now.
+
+An initial version of this window-scoping added a margin-fetch mechanism (`PlanMargins`/`MarginPlan`):
+if the requested window was shorter than whatever sample size tuning needed, decode outward past the
+window's own edges (never past an already-found internal cut) to pad the sample up to size. This was
+removed again in Part C below once `ParameterTuner`'s own design stopped needing it — see that
+section's "short scene" fix. `ScanAsync`'s `StartMs`/`EndMs` now always equal the requested window
+exactly, nothing padded past it.
+
+### Part A — global content-addressed asset store, `VideoId` dropped entirely
+
+`VideoSourcePlan` carried a `VideoId` (by then already a stable `(path, fps)` hash, per the earlier
+fix above) that named the asset store's own subfolder — one `AssetStore` instance per plan. This
+still blocked two real dedupe opportunities the user wanted: the same file re-encoded at a different
+fps, and two *different* files whose tiles happen to produce byte-identical pixel content, neither of
+which shares a `VideoId` and so neither could ever share a cached asset.
+
+Fixed by going further than a better `VideoId`: dropped the field entirely. One flat,
+content-addressed `AssetStore` instance (`s/{hash}.png`, `a/{hash}/f{n}.png`) is now shared across
+the *whole compile*, not one per plan — asset identity is decided purely by a tile's own content
+hash, nothing else. `VideoSourcePlan` no longer carries any per-plan identity at all. Scope decision
+(via explicit choice, not left implicit): exact-hash dedupe only — no near-duplicate/perceptual
+matching, no cross-fps frame interpolation to manufacture more hash hits. `AssetStore` must be
+constructed once per `CompileAsync` call and passed down, not once per plan — confirmed via the same
+`FileCount`/`TotalBytes` accounting the store already tracked internally (a second per-plan instance
+would silently double-count a cross-plan cache hit that never touched the first instance's own
+in-memory dedupe table, even though the on-disk skip-if-exists write is safe either way).
+
+### Heatmap-adaptive tile partitioning spike — see the "Rejected directions" entry above (built,
+tested against fish_spinning/minecraft/short_animation, not adopted — the shipped tuner's own
+`TileSize` choice on high-motion content ran opposite the spike's founding hypothesis).
+
+### Part C — train/eval tuning sample methodology, short-scene fix
+
+Motivation: `ParameterTuner`'s original design (see "Global auto-tune" above) probed one single
+~1.5s sample window per candidate — a candidate could look like a clean win purely because of what
+that one clip happened to contain, with no check against how it performed on the rest of the scene.
+
+Design, settled through dialogue (each choice confirmed explicitly, not defaulted):
+- **Eval's purpose is rejection, not just measurement** — a candidate must clear the PSNR floor on
+  *both* its train probe and a held-out eval probe it never saw during selection, not just get its
+  train/eval numbers reported. `ParameterTuner.Select`'s gate: `train.Psnr >= floor && eval.Psnr >=
+  floor`, both required.
+- **Sampling strategy: evenly spread across time**, not random or front-loaded.
+- **Sizing: 3 train segments + 1 eval segment, 500ms each, ~2000ms total** as the starting point (an
+  explicit placeholder — the plan noted this would need real benchmarking against the earlier
+  `SampleWindowMs=1500` value, not a final number).
+
+**Bug found via real regression (`badapple8`), not caught by unit tests**: the first implementation
+spread the 3 train + 1 eval windows across 4 *separate, far-apart* quarters of the scene (~25%/50%/
+75%/center). On the real `bad_apple` fixture this measured baseline PSNR at 28.02dB instead of the
+previously-established ~24.90dB (single-sample) baseline — the far-apart eval slice happened to land
+on easier-to-compress content, shifting the self-calibrated floor up by ~3dB and causing every axis
+to fall back to baseline. Net effect: total bytes +18.9% (34.3MB vs. the known-good 28.9MB) and ~2x
+tuning time, a real regression, not noise. Root cause: a train/eval split whose samples are scattered
+across a scene measures "how well does this combo generalize across everywhere in the scene," which
+is a different, stricter question than "is a 3s local sample representative enough" — and the floor
+computation is sensitive to exactly where its own baseline probe happens to land.
+
+Fix: replaced the scattered-quarters layout with one **local block** of `RequiredSampleMs=3000ms`
+(centered within the segment if it's the first segment being tuned, anchored at the segment's own
+start otherwise), subdivided into 4 *contiguous* 750ms chunks inside that one block — chunks 0,1,3
+train, chunk 2 eval. Verified via the same real fixture (`badapple9`): output byte-identical to the
+pre-regression known-good baseline (28,793,996 total bytes), same combo chosen per scene.
+
+**Final refinement, from a user insight**: a scene no longer than `RequiredSampleMs` isn't a sample of
+anything bigger — it *is* the entire deliverable for that scene, so tuning it against a held-out eval
+slice of itself achieves nothing (there's no "unseen material" left to generalize to; overfitting to
+100% of your own exact output data is the goal, not a risk). `BuildSampleWindows` now branches: a
+segment `<= RequiredSampleMs` returns its own full span as both train and eval (probed once, the eval
+result reused rather than re-probed); a longer segment keeps the 4-chunk local-block split unchanged.
+This also removed the last consumer of Part B's margin-fetch mechanism (`PlanMargins`) — a short
+scene no longer needs padding out to a fixed sample size at all, so `ScenePrePass` lost that mechanism
+entirely, and `ScanAsync`'s returned range is now always exactly the requested window.
+
+Verified via real regression (`badapple10`, same fixture/window used throughout): for the one short
+scene in that fixture (2083ms, under the 3000ms threshold), every probe line's `trainPSNR` and
+`evalPSNR` printed as exactly equal (confirming reuse, not a duplicate second probe); the fixture's
+other, longer scene still split normally. Output (`sprites=6897 animations=1467 commands=8364
+assets=27706`) matched the prior confirmed-good baseline in every counted dimension; total bytes
+landed within 0.03% of the previously recorded baseline total (some byte-level noise remains between
+runs separated by intervening code changes and cleaned-up scratch state — the counted-object equality
+above is the stronger signal that nothing regressed).
