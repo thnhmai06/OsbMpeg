@@ -1,6 +1,6 @@
 using System.IO.Hashing;
 
-namespace OsbMpeg.Compiler.Analysis;
+namespace OsbMpeg.Compiler.Shared.Analysis;
 
 /// <summary>
 ///     Hashes tile pixel content after quantizing to `levels` per channel, so

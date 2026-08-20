@@ -6,7 +6,7 @@ using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.Processing.Processors.Quantization;
 
-namespace OsbMpeg.Compiler.Osb;
+namespace OsbMpeg.Compiler.Encode;
 
 /// <summary>
 ///     Which line type will reference the asset. osu!'s texture cache keys include

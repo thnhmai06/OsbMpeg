@@ -1,11 +1,10 @@
 using System.Diagnostics;
-using OsbMpeg.Compiler.Media;
-using OsbMpeg.Compiler.Osb;
+using OsbMpeg.Compiler.Shared.Media;
 using OsbMpeg.Parsers.Ir;
 using OsbMpeg.Parsers.Ir.Passes;
 using OsbMpeg.Parsers.Osb;
 
-namespace OsbMpeg.Compiler.Encoder;
+namespace OsbMpeg.Compiler.Encode;
 
 /// <summary>
 ///     Orchestrates the MVP encode path: stream decoded frames, run the tile-grid

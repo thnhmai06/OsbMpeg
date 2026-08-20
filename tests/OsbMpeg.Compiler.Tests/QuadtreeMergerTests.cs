@@ -1,4 +1,4 @@
-using OsbMpeg.Compiler.Analysis;
+using OsbMpeg.Compiler.Shared.Analysis;
 using Xunit;
 
 namespace OsbMpeg.Compiler.Tests;

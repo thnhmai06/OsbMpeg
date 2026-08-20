@@ -1,4 +1,4 @@
-namespace OsbMpeg.Compiler.Encoder;
+namespace OsbMpeg.Compiler.Encode;
 
 public sealed record EncodeProgress(
     int FrameIndex,

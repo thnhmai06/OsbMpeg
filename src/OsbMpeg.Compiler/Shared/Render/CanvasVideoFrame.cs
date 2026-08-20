@@ -1,6 +1,6 @@
 using FFMpegCore.Pipes;
 
-namespace OsbMpeg.Compiler.Render;
+namespace OsbMpeg.Compiler.Shared.Render;
 
 /// <summary>Adapts a rendered Canvas to FFMpegCore's raw-video pipe input contract.</summary>
 public sealed class CanvasVideoFrame(Canvas canvas) : IVideoFrame

@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace OsbMpeg.Compiler.Encoder;
+namespace OsbMpeg.Compiler.Encode;
 
 public sealed record EncodeOptions(
     string InputPath,

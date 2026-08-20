@@ -1,7 +1,7 @@
 using OsbMpeg.Parsers.Ir;
 using OsbMpeg.Parsers.Osb;
 
-namespace OsbMpeg.Compiler.Osb;
+namespace OsbMpeg.Compiler.Encode;
 
 /// <summary>
 ///     Round-trip sanity check: decode what we just wrote with OsuParsers' own

@@ -1,10 +1,10 @@
-using OsbMpeg.Compiler.Osb;
+using OsbMpeg.Compiler.Encode;
 using OsbMpeg.Parsers.Ir;
 using OsbMpeg.Parsers.Render;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
-namespace OsbMpeg.Compiler.Render;
+namespace OsbMpeg.Compiler.Shared.Render;
 
 /// <summary>
 ///     Renders a Storyboard IR document to RGB frames in-process, following the

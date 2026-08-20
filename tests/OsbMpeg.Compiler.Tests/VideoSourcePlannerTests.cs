@@ -1,5 +1,5 @@
 using OsbMpeg.Compiler.Compilation;
-using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Shared.Media;
 using OsbMpeg.Parsers.Ir;
 using OsbMpeg.Parsers.Osbv;
 using Xunit;

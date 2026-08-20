@@ -1,7 +1,7 @@
 using System.IO.Hashing;
 using OsbMpeg.Parsers;
 
-namespace OsbMpeg.Compiler.Analysis;
+namespace OsbMpeg.Compiler.Shared.Analysis;
 
 /// <summary>
 ///     An accumulated sequence of same-position, exactly-one-frame-long runs, ready to

@@ -1,9 +1,9 @@
-using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Shared.Media;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
 
-namespace OsbMpeg.Compiler.Encoder;
+namespace OsbMpeg.Compiler.Encode;
 
 public sealed record NaiveBaselineStats(
     long EstimatedStoryboardBytes,

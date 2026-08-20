@@ -4,7 +4,7 @@ using System.Threading.Channels;
 using FFMpegCore;
 using FFMpegCore.Pipes;
 
-namespace OsbMpeg.Compiler.Media;
+namespace OsbMpeg.Compiler.Shared.Media;
 
 public sealed record FrameSourceOptions(
     int Width,
@@ -45,9 +45,10 @@ public sealed record FrameSourceOptions(
 /// </summary>
 public static class FrameSource
 {
-    // 60s, not 20s: SceneCache now tunes multiple scenes concurrently, so several ffmpeg
-    // startups can be competing for CPU/disk at once. A genuinely broken input still exits
-    // in ~1.3s (see above), so this only slows down that error case -- it doesn't mask it.
+    // 60s, not 20s: ParameterTuner probes 3-4 candidate parameter values concurrently within
+    // one axis (Task.WhenAll), so several ffmpeg startups can be competing for CPU/disk at
+    // once. A genuinely broken input still exits in ~1.3s (see above), so this only slows down
+    // that error case -- it doesn't mask it.
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(60);
 
     public static async IAsyncEnumerable<VideoFrame> ReadFramesAsync(

@@ -1,9 +1,9 @@
 using FFMpegCore;
 using FFMpegCore.Pipes;
 using OsbMpeg.Cli.Settings;
-using OsbMpeg.Compiler.Encoder;
-using OsbMpeg.Compiler.Media;
-using OsbMpeg.Compiler.Render;
+using OsbMpeg.Compiler.Encode;
+using OsbMpeg.Compiler.Shared.Media;
+using OsbMpeg.Compiler.Shared.Render;
 using OsbMpeg.Parsers.Osb;
 using Spectre.Console;
 using Spectre.Console.Cli;

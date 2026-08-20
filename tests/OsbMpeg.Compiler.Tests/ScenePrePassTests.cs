@@ -1,4 +1,4 @@
-using OsbMpeg.Compiler.Tuning;
+using OsbMpeg.Compiler.Detection;
 using Xunit;
 
 namespace OsbMpeg.Compiler.Tests;
@@ -68,7 +68,7 @@ public class ScenePrePassTests
     [Fact]
     public void DistinctEventsWellOverMinSceneMsApart_AllSurvive_EvenIfCloserThanTheOldFixedWindow()
     {
-        // Real fixture data (see plan file): a genuine hard cut (bad_apple->birdbrain), a real
+        // Real fixture data (see docs/research.md): a genuine hard cut (bad_apple->birdbrain), a real
         // sustained turbulent stretch inside birdbrain's own footage ~1.6s later, and the next
         // real hard cut (birdbrain->fish_spinning) ~1.8s after that. A first design suppressed
         // anything within a fixed 2s of the previously accepted candidate on the theory that close
@@ -98,5 +98,56 @@ public class ScenePrePassTests
     {
         var cuts = ScenePrePass.DetectCuts([(0, 0), (33, 0)], 0);
         Assert.Empty(cuts);
+    }
+
+    [Fact]
+    public void PlanMargins_WindowAlreadyLongEnough_NoMarginRequested()
+    {
+        // Window is 10000ms, requiredSampleMs is 1500 -- plenty already, no internal cuts.
+        var plan = ScenePrePass.PlanMargins(0, 10000, [], 1500, 100000);
+
+        Assert.Null(plan.LeadInStartMs);
+        Assert.Null(plan.TrailOutEndMs);
+    }
+
+    [Fact]
+    public void PlanMargins_ShortWindowNoInternalCuts_RequestsBothMargins()
+    {
+        // Window is only 500ms, well under requiredSampleMs -- both edges are "outer" edges here
+        // (no internal cut splits it), so both get a margin request (see PlanMargins' own doc
+        // comment on why this over-fetches slightly rather than sequencing the two checks).
+        var plan = ScenePrePass.PlanMargins(10000, 10500, [], 1500, 100000);
+
+        Assert.Equal(9000, plan.LeadInStartMs); // 10000 - (1500 - 500)
+        Assert.Equal(11500, plan.TrailOutEndMs); // 10500 + (1500 - 500)
+    }
+
+    [Fact]
+    public void PlanMargins_LeadInCappedAtZero_NeverRequestsBeforeFileStart()
+    {
+        var plan = ScenePrePass.PlanMargins(500, 1000, [], 1500, 100000);
+
+        Assert.Equal(0, plan.LeadInStartMs); // would be 500-1000=-500, clamped to 0
+    }
+
+    [Fact]
+    public void PlanMargins_TrailOutCappedAtFileDuration_NeverRequestsPastFileEnd()
+    {
+        var plan = ScenePrePass.PlanMargins(98500, 99000, [], 1500, 99500);
+
+        Assert.Equal(99500, plan.TrailOutEndMs); // would be 99000+1000=100000, clamped to 99500
+    }
+
+    [Fact]
+    public void PlanMargins_InternalCutSplitsWindow_OnlyOuterEdgesConsidered()
+    {
+        // Window [0,10000) with one internal cut at 9800 -> sub-windows [0,9800) (plenty long) and
+        // [9800,10000) (only 200ms, short) -- only the trailing edge needs a margin, and the
+        // leading edge is measured against the FIRST sub-window (0..9800, already long enough),
+        // not against the whole window.
+        var plan = ScenePrePass.PlanMargins(0, 10000, [9800], 1500, 100000);
+
+        Assert.Null(plan.LeadInStartMs);
+        Assert.Equal(11300, plan.TrailOutEndMs); // 10000 + (1500 - 200)
     }
 }

@@ -2,7 +2,7 @@ using FFMpegCore;
 using FFMpegCore.Enums;
 using FFMpegCore.Pipes;
 
-namespace OsbMpeg.Compiler.Media;
+namespace OsbMpeg.Compiler.Shared.Media;
 
 /// <summary>
 ///     Encodes a sequence of rgb24 frames into a video file via ffmpeg's raw-video pipe

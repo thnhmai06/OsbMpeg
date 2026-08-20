@@ -1,4 +1,4 @@
-namespace OsbMpeg.Compiler.Analysis;
+namespace OsbMpeg.Compiler.Shared.Analysis;
 
 /// <summary>
 ///     Fixed grid over the canvas. Edge tiles are smaller than TileSize when the

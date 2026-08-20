@@ -1,6 +1,6 @@
-using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Shared.Media;
 
-namespace OsbMpeg.Compiler.Analysis;
+namespace OsbMpeg.Compiler.Shared.Analysis;
 
 /// <summary>
 ///     One closed run of a tile (or, after QuadtreeMerger, a merged block of tiles):

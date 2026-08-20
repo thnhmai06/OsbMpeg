@@ -1,6 +1,6 @@
 using System.Buffers;
 
-namespace OsbMpeg.Compiler.Media;
+namespace OsbMpeg.Compiler.Shared.Media;
 
 /// <summary>
 ///     One decoded frame as packed Rgb24 (3 bytes/pixel, row-major, no row padding —

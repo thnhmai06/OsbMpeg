@@ -1,4 +1,4 @@
-namespace OsbMpeg.Compiler.Render;
+namespace OsbMpeg.Compiler.Shared.Render;
 
 /// <summary>Plain RGB24 framebuffer the renderer composites into.</summary>
 public sealed class Canvas(int width, int height)

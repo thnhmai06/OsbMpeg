@@ -1,8 +1,7 @@
-using OsbMpeg.Compiler.Encoder;
-using OsbMpeg.Compiler.Evaluation;
-using OsbMpeg.Compiler.Media;
-using OsbMpeg.Compiler.Osb;
-using OsbMpeg.Compiler.Render;
+using OsbMpeg.Compiler.Encode;
+using OsbMpeg.Compiler.Shared.Evaluation;
+using OsbMpeg.Compiler.Shared.Media;
+using OsbMpeg.Compiler.Shared.Render;
 using OsbMpeg.Parsers.Ir;
 
 namespace OsbMpeg.Compiler.Tuning;
@@ -47,7 +46,11 @@ public static class ParameterTuner
 {
     private const double TargetSlackDb = 1.0;
     private const double BytesPerCommandEstimate = 100; // fish_spin_test: 44.63KB / 445 commands ≈ 100.3, this session
-    private const double SampleWindowMs = 1500; // real cost measured ~2x SoftwareStoryboardRenderer render time vs. encode time at 4000ms — see plan file
+    // Also used by Detection (ScenePrePass's margin-fetch, via VideoCompiler) as the "how much
+    // material does one scene's tuning sample need" placeholder -- real cost measured ~2x
+    // SoftwareStoryboardRenderer render time vs. encode time at 4000ms — see docs/research.md.
+    // Not re-benchmarked since; revisit once a real train/val/test sampling design exists.
+    internal const double SampleWindowMs = 1500;
 
     private static readonly int[] TileSizeCandidates = [64, 128, 256];
     private static readonly int[] ColorsCandidates = [0, 32, 16];
@@ -57,15 +60,14 @@ public static class ParameterTuner
     /// <summary>
     ///     Tunes one scene/segment of a video — <paramref name="segmentStartMs" />/
     ///     <paramref name="segmentEndMs" /> are absolute, file-relative timestamps (from
-    ///     SceneCache's scene list, itself anchored to the whole file so cross-project cache sharing
-    ///     still holds — see SceneCache.cs), not the calling .osbv project's own window. A video
-    ///     with no detected scene cuts is exactly one segment spanning [0, duration) with
-    ///     <paramref name="isFirstSegment" />=true — the general form this always was, not a
-    ///     parallel path (this API used to be file-duration-centered with no segment concept; that
-    ///     behavior is reproduced exactly by that one-segment case).
+    ///     VideoCompiler's own scene list, anchored to the whole file), not the calling .osbv
+    ///     project's own window. A video with no detected scene cuts is exactly one segment spanning
+    ///     [0, duration) with <paramref name="isFirstSegment" />=true — the general form this always
+    ///     was, not a parallel path (this API used to be file-duration-centered with no segment
+    ///     concept; that behavior is reproduced exactly by that one-segment case).
     ///     The first segment samples a window centered within itself, same as the old whole-file
     ///     design, to avoid an atypical intro/title-card. Every later segment (which always starts
-    ///     right after a real cut, per SceneCache) samples starting at its own beginning instead —
+    ///     right after a real cut) samples starting at its own beginning instead —
     ///     anchoring there folds that segment's own one-time full-canvas re-emit cost into its own
     ///     probe; a mid-segment sample would never see it, silently under-costing a big TileSize
     ///     candidate that looks cheap in isolation but is expensive specifically at the cut it owns.

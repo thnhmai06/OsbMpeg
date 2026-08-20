@@ -1,4 +1,4 @@
-namespace OsbMpeg.Compiler.Evaluation;
+namespace OsbMpeg.Compiler.Shared.Evaluation;
 
 /// <summary>
 ///     Quality metrics for benchmark reconstruction comparison. Both operate on

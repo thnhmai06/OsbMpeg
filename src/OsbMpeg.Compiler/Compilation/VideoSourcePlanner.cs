@@ -1,5 +1,5 @@
 using System.Text;
-using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Shared.Media;
 using OsbMpeg.Parsers.Osbv;
 using System.IO.Hashing;
 
@@ -12,11 +12,10 @@ namespace OsbMpeg.Compiler.Compilation;
 ///     of which other sources appear in the same document or in what order — matches the existing
 ///     asset path convention (video-id/s/&lt;hex&gt;.png, video-id/a/&lt;hex&gt;/f&lt;n&gt;.png).
 ///     Stability matters beyond one compile: it's also the cache key `AssetStore`'s persistent
-///     content-addressed layout and `SceneCache`'s per-video scene/tuning cache both live under —
-///     two different .osbv projects referencing the same video file must land on the same VideoId
-///     to ever share either cache, which a plain first-seen-order counter (the original design)
-///     could not guarantee once two projects disagreed on how many *other* sources they reference
-///     or in what order.
+///     content-addressed layout lives under — two different .osbv projects referencing the same
+///     video file must land on the same VideoId to ever share that cache, which a plain
+///     first-seen-order counter (the original design) could not guarantee once two projects
+///     disagreed on how many *other* sources they reference or in what order.
 /// </summary>
 public sealed record VideoSourcePlan(
     VideoSourceKey Key,

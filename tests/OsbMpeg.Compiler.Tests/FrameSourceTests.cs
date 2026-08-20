@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Shared.Media;
 using Xunit;
 
 namespace OsbMpeg.Compiler.Tests;

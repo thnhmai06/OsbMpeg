@@ -1,6 +1,6 @@
 using FFMpegCore;
 using OsbMpeg.Cli.Settings;
-using OsbMpeg.Compiler.Media;
+using OsbMpeg.Compiler.Shared.Media;
 using Spectre.Console;
 using Spectre.Console.Cli;
 

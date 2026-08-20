@@ -1,6 +1,6 @@
 using OsbMpeg.Parsers;
 
-namespace OsbMpeg.Compiler.Analysis;
+namespace OsbMpeg.Compiler.Shared.Analysis;
 
 /// <summary>
 ///     Merges a batch of same-frame closed TileRuns (everything TileRunTracker.Advance

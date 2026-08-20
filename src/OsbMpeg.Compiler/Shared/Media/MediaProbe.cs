@@ -1,6 +1,6 @@
 using FFMpegCore;
 
-namespace OsbMpeg.Compiler.Media;
+namespace OsbMpeg.Compiler.Shared.Media;
 
 public sealed record MediaInfo(int Width, int Height, double SourceFps, TimeSpan Duration, string CodecName);
 

@@ -1,4 +1,4 @@
-using OsbMpeg.Compiler.Encoder;
+using OsbMpeg.Compiler.Encode;
 using Spectre.Console;
 
 namespace OsbMpeg.Cli.Formats;

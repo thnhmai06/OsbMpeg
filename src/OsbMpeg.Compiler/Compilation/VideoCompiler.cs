@@ -1,6 +1,6 @@
-using OsbMpeg.Compiler.Encoder;
-using OsbMpeg.Compiler.Media;
-using OsbMpeg.Compiler.Osb;
+using OsbMpeg.Compiler.Detection;
+using OsbMpeg.Compiler.Encode;
+using OsbMpeg.Compiler.Shared.Media;
 using OsbMpeg.Compiler.Tuning;
 using OsbMpeg.Parsers;
 using OsbMpeg.Parsers.Ir;
@@ -143,12 +143,17 @@ public static class VideoCompiler
         async Task<List<ScenePlan>> ScenesFor(VideoSourcePlan plan, MediaInfo info)
         {
             if (scenesByPlan.TryGetValue(plan, out var existing)) return existing;
-            // In-memory only for this one CompileAsync call (see SceneCache.cs's own doc comment):
-            // detection runs once per plan here even though multiple AnimationVideo entries can
-            // reference it, and each scene's Tuned starts null, filled in lazily by
-            // EnsureTunedAsync only for scenes a caller actually ends up encoding.
-            var scenes = await SceneCache.BuildAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps,
-                hwAccel, log, ct);
+            // In-memory only for this one CompileAsync call: detection runs once per plan here
+            // even though multiple AnimationVideo entries can reference it, scoped to the plan's
+            // own UnionStartMs/UnionEndMs (not the whole file -- see ScenePrePass.cs's own doc
+            // comment for why). Each scene's Tuned starts null, filled in lazily (see TunedFor
+            // below) only for scenes a caller actually ends up encoding.
+            var inputPath = plan.Members[0].FilePath;
+            var scenes = await SceneBounds.BuildCoreAsync(
+                ct2 => ScenePrePass.ScanAsync(inputPath, info.Width, info.Height, plan.Key.EffectiveFps,
+                    plan.UnionStartMs, plan.UnionEndMs, ParameterTuner.SampleWindowMs,
+                    info.Duration.TotalMilliseconds, hwAccel, log, ct2),
+                Path.GetFileName(inputPath), log, ct);
             return scenesByPlan[plan] = scenes;
         }
     }
@@ -168,6 +173,27 @@ public static class VideoCompiler
     private static (double Start, double End) Window(OsbvAnimationVideo v, MediaInfo info)
     {
         return (v.VideoStartMs ?? 0, v.VideoEndMs ?? info.Duration.TotalMilliseconds);
+    }
+
+    /// <summary>
+    ///     Tunes scenes[index] if it isn't already and returns the (possibly newly-tuned) params.
+    ///     Callers only ever touch one plan's scene list sequentially within one CompileAsync run
+    ///     (CompileAsync's own foreach over document.Objects is a single sequential await per
+    ///     object, never concurrent), so no locking here.
+    /// </summary>
+    private static async Task<TunedParameters> TunedFor(string inputPath, MediaInfo info, double fps,
+        List<ScenePlan> scenes, int index, string? hwAccel, Action<string>? log, CancellationToken ct)
+    {
+        if (scenes[index].Tuned is { } already) return already;
+
+        var scene = scenes[index];
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var tuned = await ParameterTuner.TuneAsync(inputPath, info, fps, scene.StartMs, scene.EndMs,
+            index == 0, hwAccel, log, ct);
+        log?.Invoke($"scene [{scene.StartMs:F0},{scene.EndMs:F0}) tuned in {sw.ElapsedMilliseconds}ms");
+
+        scenes[index] = scene with { Tuned = tuned };
+        return tuned;
     }
 
     private static TileEncodeLoop.Options LoopOptions(string inputPath, MediaInfo info, double fps, double startMs,
@@ -218,8 +244,7 @@ public static class VideoCompiler
             var (subStart, subEnd) = Clip(vStart, vEnd, scenes[i]);
             if (subEnd <= subStart) continue;
 
-            var tuned = await SceneCache.EnsureTunedAsync(v.FilePath, info, plan.Key.EffectiveFps, scenes, i,
-                hwAccel, log, ct);
+            var tuned = await TunedFor(v.FilePath, info, plan.Key.EffectiveFps, scenes, i, hwAccel, log, ct);
 
             var offsetMs = v.StartTimeMs + (subStart - vStart);
             var target = new TileEncodeLoop.EmitTarget(mapping, v.Layer, offsetMs, baker, doc.Add);
@@ -261,8 +286,8 @@ public static class VideoCompiler
             var (subStart, subEnd) = Clip(vStart, vEnd, scenes[si]);
             if (subEnd <= subStart) continue;
 
-            var tuned = await SceneCache.EnsureTunedAsync(plan.Members[0].FilePath, info, plan.Key.EffectiveFps,
-                scenes, si, hwAccel, log, ct);
+            var tuned = await TunedFor(plan.Members[0].FilePath, info, plan.Key.EffectiveFps, scenes, si, hwAccel,
+                log, ct);
 
             var targets = new TileEncodeLoop.EmitTarget[plan.Members.Count];
             for (var i = 0; i < plan.Members.Count; i++)

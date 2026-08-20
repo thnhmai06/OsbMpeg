@@ -1,10 +1,9 @@
-using OsbMpeg.Compiler.Analysis;
 using OsbMpeg.Compiler.Compilation;
-using OsbMpeg.Compiler.Media;
-using OsbMpeg.Compiler.Osb;
+using OsbMpeg.Compiler.Shared.Analysis;
+using OsbMpeg.Compiler.Shared.Media;
 using OsbMpeg.Parsers.Ir;
 
-namespace OsbMpeg.Compiler.Encoder;
+namespace OsbMpeg.Compiler.Encode;
 
 /// <summary>
 ///     The tile-grid conditional-replenishment loop shared by the legacy whole-canvas
