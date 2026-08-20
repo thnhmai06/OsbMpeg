@@ -21,9 +21,32 @@ public sealed record FrameSourceOptions(
 ///     Windows, not stdout); we read it in a StreamPipeSink writer delegate and hand completed
 ///     frames to the caller through a small bounded channel, so ffmpeg naturally blocks (and the
 ///     OS pipe buffer provides backpressure) whenever the consumer falls behind.
+///     StartupTimeout guards one specific failure mode: if ffmpeg exits before ever opening the
+///     pipe at all (e.g. the input file doesn't exist — verified with a real ffmpeg run that it
+///     exits cleanly in ~1.3s in that case, it is not the ffmpeg process itself hanging), the .NET
+///     side's NamedPipeServerStream is left waiting for a connection that will never come — no
+///     EOF, no exception, it just hangs forever, and nothing about the ffmpeg process having
+///     already exited unblocks it on its own. Three earlier attempts at this fix, each measured
+///     wrong rather than assumed: (1) cancelling once FFMpegArguments.ProcessAsynchronously()'s
+///     own task completed — that task doesn't return until the sink's pipe I/O finishes, so it's
+///     blocked on the exact same stuck wait and never fires; (2) bounding only the sink callback's
+///     first ReadAsync — the connection handshake happens *before* the sink delegate is ever
+///     invoked when the client never connects, so no code inside the sink ever runs to enforce a
+///     bound; (3) FFMpegArgumentProcessor.CancellableThrough(token) to kill the ffmpeg process —
+///     pointless once the process has already exited on its own, which is exactly this case; it
+///     doesn't touch the .NET-side pipe-server wait at all. What actually works: bound only *our
+///     own* channel wait (ChannelReader.WaitToReadAsync takes a token per call, entirely within
+///     this method's control, independent of whatever FFMpegCore is doing internally) for the
+///     first item specifically. Once real data has flowed once, decode pacing is normal and
+///     unbounded, same as before. If the timeout does fire, the sink's own background read stays
+///     orphaned, blocked forever on that pipe connection — accepted for this narrow, essentially
+///     always-a-caller-bug case (a nonexistent/unreadable input) in exchange for the caller never
+///     hanging, rather than chasing a fully clean teardown through a third-party black box.
 /// </summary>
 public static class FrameSource
 {
+    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
+
     public static async IAsyncEnumerable<VideoFrame> ReadFramesAsync(
         string inputPath,
         FrameSourceOptions opts,
@@ -85,6 +108,25 @@ public static class FrameSource
             });
 
         var processTask = args.ProcessAsynchronously();
+
+        using (var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            startupCts.CancelAfter(StartupTimeout);
+            bool hasData;
+            try
+            {
+                hasData = await channel.Reader.WaitToReadAsync(startupCts.Token);
+            }
+            catch (OperationCanceledException) when (startupCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"ffmpeg produced no output within {StartupTimeout} decoding \"{inputPath}\" — it likely " +
+                    "failed before ever opening its output pipe (check the input path and ffmpeg's own stderr).");
+            }
+
+            if (!hasData)
+                await processTask; // channel completed with nothing — surface ffmpeg's real failure, if any
+        }
 
         await foreach (var frame in channel.Reader.ReadAllAsync(ct))
             yield return frame;
