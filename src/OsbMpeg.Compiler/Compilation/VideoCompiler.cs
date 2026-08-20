@@ -61,13 +61,22 @@ public static class VideoCompiler
                 "(likely on different drives) — osu! needs a relative path in the .osb. Put output and assets under a common root.");
         Directory.CreateDirectory(assetsRootAbs);
 
+        // One flat, content-addressed store for the whole compile -- not one per video source.
+        // A tile's hash alone decides asset identity; two plans (different videos, or the same
+        // video at different fps) that happen to produce byte-identical tile content share the
+        // same file. Must be shared, not one instance per plan: hexNaming's on-disk skip-if-exists
+        // check makes a same-run cross-plan hit safe to *write* even split across instances, but
+        // FileCount/TotalBytes would still double-count a hit that never touched the in-memory
+        // dedupe table of the instance that already wrote it -- one shared instance is what keeps
+        // those stats (and the final AssetCount below) correct, not just what keeps the disk safe.
+        var assetStore = new AssetStore(assetsRootAbs, assetRelativeRoot, "", hexNaming: true);
+
         var probeCache = new Dictionary<string, MediaInfo>(StringComparer.OrdinalIgnoreCase);
 
         var animationVideos = document.Objects.OfType<OsbvAnimationVideo>().ToList();
         var plans = await VideoSourcePlanner.PlanAsync(animationVideos, Probe);
         var planByMember = plans.SelectMany(p => p.Members.Select(m => (Member: m, Plan: p)))
             .ToDictionary(t => t.Member, t => t.Plan);
-        var assetStoreByPlan = new Dictionary<VideoSourcePlan, AssetStore>();
         var scenesByPlan = new Dictionary<VideoSourcePlan, List<ScenePlan>>();
         var consumedMembers = new HashSet<OsbvAnimationVideo>();
 
@@ -99,7 +108,6 @@ public static class VideoCompiler
                     var plan = planByMember[v];
                     var info = probeCache[Path.GetFullPath(v.FilePath)];
                     var scenes = await ScenesFor(plan, info);
-                    var assetStore = AssetStoreFor(plan);
 
                     if (plan.Members.Count > 1 && SharesWindow(plan, info))
                     {
@@ -122,7 +130,7 @@ public static class VideoCompiler
         OsbValidator.Validate(osbOutputPath, doc);
 
         return new VideoCompileResult(doc.SpriteCount, doc.AnimationCount, doc.CommandCount,
-            assetStoreByPlan.Values.Sum(s => s.FileCount), plans.Count);
+            assetStore.FileCount, plans.Count);
 
         async Task<MediaInfo> Probe(string path)
         {
@@ -130,14 +138,6 @@ public static class VideoCompiler
             if (!probeCache.TryGetValue(normalized, out var info))
                 probeCache[normalized] = info = await MediaProbe.AnalyseAsync(normalized, ct);
             return info;
-        }
-
-        AssetStore AssetStoreFor(VideoSourcePlan plan)
-        {
-            if (assetStoreByPlan.TryGetValue(plan, out var existing)) return existing;
-            var absoluteDir = Path.Combine(assetsRootAbs, plan.VideoId);
-            var relativeDir = $"{assetRelativeRoot}/{plan.VideoId}";
-            return assetStoreByPlan[plan] = new AssetStore(absoluteDir, relativeDir, "", hexNaming: true);
         }
 
         async Task<List<ScenePlan>> ScenesFor(VideoSourcePlan plan, MediaInfo info)

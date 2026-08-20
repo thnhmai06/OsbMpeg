@@ -42,7 +42,7 @@ public enum AssetConsumer : byte
 ///     it per invocation, for this cache to pay off at all. Colors is different in kind — folded
 ///     into the content hash as XXH3's seed (GetOrAdd/WriteAnimation) rather than fixed at
 ///     construction, specifically so per-scene tuning can pick a different Colors value per scene
-///     within one AssetStore/VideoId without two scenes' differently-quantized requests for the
+///     within the one shared AssetStore without two scenes' differently-quantized requests for the
 ///     same raw pixels colliding onto one file.
 ///     legacy layout (whole-canvas bench path): sprites/{prefix}{n}.png,
 ///     animations/a{id}/a{id}.png (+ per-frame a{id}{i}.png written by WriteAnimation) — a plain
@@ -128,7 +128,7 @@ public sealed class AssetStore
     ///     layout ffmpeg's rawvideo/rgb24 output uses. <paramref name="colors" /> (the PNG
     ///     palette-quantization level to encode this asset with) is folded into the hash as XXH3's
     ///     seed, not just used for the PNG write below — per-scene tuning can pick a different
-    ///     Colors value for different scenes sharing one AssetStore/VideoId, and the same raw tile
+    ///     Colors value for different scenes (now potentially from different video sources too) sharing the one global AssetStore, and the same raw tile
     ///     content quantized two different ways is two different assets, not one; hashing on raw
     ///     bytes alone would let whichever scene wrote first silently dictate the quantization the
     ///     other scene's (never re-checked, hexNaming skips existing files) request wanted too.
