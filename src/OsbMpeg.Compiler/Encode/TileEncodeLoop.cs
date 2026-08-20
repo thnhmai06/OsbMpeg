@@ -19,7 +19,8 @@ public static class TileEncodeLoop
 {
     public static async Task<Result> RunAsync(
         Options o, AssetStore assetStore,
-        Action<int, double>? onProgress, CancellationToken ct, Action<VideoFrame, double>? onFrame = null)
+        Action<int, double>? onProgress, CancellationToken ct, Action<VideoFrame, double>? onFrame = null,
+        Action<EncodeStageTimes>? onStageTimes = null)
     {
         var grid = new TileGrid(o.Width, o.Height, o.TileSize);
         var tracker = new TileRunTracker(grid, o.HashQuantLevels, !o.RawSnapshot, o.TileTolerance);
@@ -30,32 +31,128 @@ public static class TileEncodeLoop
         var frameCount = 0;
         var lastMs = 0.0;
 
-        await foreach (var frame in FrameSource.ReadFramesAsync(o.InputPath, frameOpts, ct))
+        // Opt-in stage instrumentation (onStageTimes == null => zero overhead, no Stopwatch kept).
+        // FrameWaitMs is wall time spent *waiting* for the frame source to deliver the next frame
+        // (ffmpeg spawn/seek/decode/pipe for the first, stream teardown for the last; ~zero when
+        // frames come from PreDecodedFrames) -- everything in this pass that is not one of the CPU
+        // stages below. Track/Merge/Detect/Emit cover the per-frame + final-flush encode work.
+        var stageSw = onStageTimes is null ? null : System.Diagnostics.Stopwatch.StartNew();
+        var stageTimes = onStageTimes is null ? null : new EncodeStageTimes();
+        long frameReadyMs = 0;
+        long afterEmitMs = 0;
+
+        // PreDecodedFrames (ParameterTuner's shared sample windows, see TuneAsync): the probe
+        // already captured these exact frames once, so replay them from memory instead of
+        // spawning ffmpeg again -- identical bytes, zero re-decode.
+        var frames = o.PreDecodedFrames is not null
+            ? FrameSource.ReadBuffersAsync(o.PreDecodedFrames, frameOpts, ct)
+            : FrameSource.ReadFramesAsync(o.InputPath, frameOpts, ct);
+
+        await foreach (var frame in frames.WithCancellation(ct))
             using (frame)
             {
+                if (stageTimes is not null)
+                {
+                    frameReadyMs = stageSw!.ElapsedMilliseconds;
+                    stageTimes.FrameWaitMs += frameReadyMs - afterEmitMs; // first frame includes ffmpeg startup
+                }
+
                 lastMs = frame.Pts * 1000.0;
                 frameCount++;
                 onFrame?.Invoke(frame, lastMs);
 
                 var batch = tracker.Advance(frame, lastMs);
+                if (stageTimes is not null)
+                {
+                    var t1 = stageSw!.ElapsedMilliseconds;
+                    stageTimes.TrackMs += t1 - frameReadyMs;
+                    frameReadyMs = t1;
+                }
+
                 var merged = o.NoQuadtree
                     ? batch
                     : QuadtreeMerger.Merge(batch, grid, o.MaxAssetPixels, 1000.0 / o.Fps);
+                if (stageTimes is not null)
+                {
+                    var t2 = stageSw!.ElapsedMilliseconds;
+                    stageTimes.MergeMs += t2 - frameReadyMs;
+                    frameReadyMs = t2;
+                }
+
                 var (sprites, animations) = animationDetector.Process(merged, o.TileSize);
+                if (stageTimes is not null)
+                {
+                    var t3 = stageSw!.ElapsedMilliseconds;
+                    stageTimes.DetectMs += t3 - frameReadyMs;
+                    frameReadyMs = t3;
+                }
+
                 Emit(sprites, animations, assetStore, o.Targets, o.Colors);
+                if (stageTimes is not null)
+                {
+                    afterEmitMs = stageSw!.ElapsedMilliseconds;
+                    stageTimes.EmitMs += afterEmitMs - frameReadyMs;
+                    stageTimes.Frames = frameCount;
+                }
 
                 onProgress?.Invoke(frameCount, frame.Pts);
             }
 
+        if (stageTimes is not null)
+        {
+            // Stream teardown after the last frame -- part of the decode-side cost, not our CPU.
+            stageTimes.FrameWaitMs += stageSw!.ElapsedMilliseconds - afterEmitMs;
+            frameReadyMs = stageSw.ElapsedMilliseconds;
+        }
+
         var finalBatch = tracker.Flush(lastMs);
+        if (stageTimes is not null)
+        {
+            var f1 = stageSw!.ElapsedMilliseconds;
+            stageTimes.TrackMs += f1 - frameReadyMs;
+            frameReadyMs = f1;
+        }
+
         var finalMerged = o.NoQuadtree
             ? finalBatch
             : QuadtreeMerger.Merge(finalBatch, grid, o.MaxAssetPixels, 1000.0 / o.Fps);
+        if (stageTimes is not null)
+        {
+            var f2 = stageSw!.ElapsedMilliseconds;
+            stageTimes.MergeMs += f2 - frameReadyMs;
+            frameReadyMs = f2;
+        }
+
         var (finalSprites, finalAnimations) = animationDetector.Process(finalMerged, o.TileSize);
+        if (stageTimes is not null)
+        {
+            var f3 = stageSw!.ElapsedMilliseconds;
+            stageTimes.DetectMs += f3 - frameReadyMs;
+            frameReadyMs = f3;
+        }
+
         Emit(finalSprites, finalAnimations, assetStore, o.Targets, o.Colors);
+        if (stageTimes is not null)
+        {
+            var f4 = stageSw!.ElapsedMilliseconds;
+            stageTimes.EmitMs += f4 - frameReadyMs;
+            frameReadyMs = f4;
+        }
 
         var (tailSprites, tailAnimations) = animationDetector.FlushAll();
+        if (stageTimes is not null)
+        {
+            var f5 = stageSw!.ElapsedMilliseconds;
+            stageTimes.DetectMs += f5 - frameReadyMs;
+            frameReadyMs = f5;
+        }
+
         Emit(tailSprites, tailAnimations, assetStore, o.Targets, o.Colors);
+        if (stageTimes is not null)
+        {
+            stageTimes.EmitMs += stageSw!.ElapsedMilliseconds - frameReadyMs;
+            onStageTimes?.Invoke(stageTimes);
+        }
 
         return new Result(frameCount, lastMs);
     }
@@ -184,7 +281,26 @@ public static class TileEncodeLoop
         long MaxAssetPixels,
         IReadOnlyList<EmitTarget> Targets,
         int Colors = 0,
-        string? HwAccel = null);
+        string? HwAccel = null,
+        IReadOnlyList<byte[]>? PreDecodedFrames = null);
+
+    /// <summary>
+    ///     Opt-in per-stage timing breakdown of a single <see cref="RunAsync" /> pass (only
+    ///     populated/fired when the run was given an <c>onStageTimes</c> callback, so the normal
+    ///     encode path pays zero for it). Stage boundaries are measured in the order the work
+    ///     happens per frame — FrameWait (waiting on the frame source), Track, Merge, Detect,
+    ///     Emit — and the final flush + residue passes are folded into the same stages. Sums to
+    ///     the pass's wall time (minus the caller's own onFrame/onProgress overhead).
+    /// </summary>
+    public sealed class EncodeStageTimes
+    {
+        public long FrameWaitMs { get; set; }
+        public long TrackMs { get; set; }
+        public long MergeMs { get; set; }
+        public long DetectMs { get; set; }
+        public long EmitMs { get; set; }
+        public int Frames { get; set; }
+    }
 
     public sealed record Result(int FrameCount, double LastFrameMs);
 }

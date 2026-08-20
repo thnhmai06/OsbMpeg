@@ -10,14 +10,16 @@ namespace OsbMpeg.Compiler.Shared.Media;
 public sealed class VideoFrame : IDisposable
 {
     private byte[]? _buffer;
+    private readonly bool _ownsBuffer;
 
-    private VideoFrame(int width, int height, int index, double pts, byte[] buffer)
+    private VideoFrame(int width, int height, int index, double pts, byte[] buffer, bool ownsBuffer = true)
     {
         Width = width;
         Height = height;
         Index = index;
         Pts = pts;
         _buffer = buffer;
+        _ownsBuffer = ownsBuffer;
     }
 
     public int Width { get; }
@@ -32,15 +34,24 @@ public sealed class VideoFrame : IDisposable
 
     public void Dispose()
     {
-        if (_buffer is not null)
-        {
-            ArrayPool<byte>.Shared.Return(_buffer);
-            _buffer = null;
-        }
+        if (_buffer is null) return;
+        
+        if (_ownsBuffer) ArrayPool<byte>.Shared.Return(_buffer);
+        _buffer = null;
     }
 
     public static VideoFrame Rent(int width, int height, int index, double pts)
     {
         return new VideoFrame(width, height, index, pts, ArrayPool<byte>.Shared.Rent(width * height * 3));
+    }
+
+    /// <summary>
+    ///     Wraps a caller-owned buffer (e.g. frames pre-decoded once and shared across tuning
+    ///     probes) — the frame never returns the buffer to the pool, so the caller keeps
+    ///     ownership and the shared bytes are only ever read.
+    /// </summary>
+    public static VideoFrame Wrap(byte[] buffer, int width, int height, int index, double pts)
+    {
+        return new VideoFrame(width, height, index, pts, buffer, ownsBuffer: false);
     }
 }

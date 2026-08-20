@@ -73,6 +73,7 @@ public sealed class AssetStore
     private readonly bool _hexNaming;
     private readonly bool _inMemory;
     private readonly Dictionary<string, byte[]>? _memoryFiles;
+    private readonly Dictionary<string, (byte[] Pixels, int Width, int Height)>? _memoryPixels;
     private readonly string _namePrefix;
     private readonly string _relativeDir;
     private int _animationCounter;
@@ -105,7 +106,10 @@ public sealed class AssetStore
         _hexNaming = hexNaming;
         _inMemory = inMemory;
         if (_inMemory)
+        {
             _memoryFiles = new Dictionary<string, byte[]>();
+            _memoryPixels = new Dictionary<string, (byte[] Pixels, int Width, int Height)>();
+        }
         else
             Directory.CreateDirectory(absoluteAssetDir);
     }
@@ -116,8 +120,21 @@ public sealed class AssetStore
     ///     isn't in-memory (callers fall back to reading the real file at AssetId's path) or the id
     ///     is unknown to this store.
     /// </summary>
-    internal byte[]? GetMemoryBytes(AssetId id) =>
-        _memoryFiles is null ? null : _memoryFiles.GetValueOrDefault(id.RelativePath);
+    internal byte[]? GetMemoryBytes(AssetId id) => _memoryFiles?.GetValueOrDefault(id.RelativePath);
+
+    /// <summary>
+    ///     Reads back the exact post-quantize pixels <see cref="SavePng" /> encoded, keyed the same
+    ///     as <see cref="GetMemoryBytes" />. PNG encoding is lossless, so these bytes are
+    ///     pixel-for-pixel identical to what decoding the stored PNG yields — letting
+    ///     SoftwareStoryboardRenderer skip the Image.Load round-trip on the probe path (see its
+    ///     LoadAsset). Null when this store isn't in-memory or the id is unknown.
+    /// </summary>
+    internal (byte[] Pixels, int Width, int Height)? GetMemoryPixels(AssetId id)
+    {
+        return _memoryPixels is not null && _memoryPixels.TryGetValue(id.RelativePath, out var stored)
+            ? stored
+            : null;
+    }
 
     public int FileCount { get; private set; }
     public int AnimationFrameCount { get; private set; }
@@ -213,6 +230,15 @@ public sealed class AssetStore
             using var image = Image.LoadPixelData<Rgb24>(rgb, width, height);
             if (colors > 0)
                 image.Mutate(ctx => ctx.Quantize(new OctreeQuantizer(new QuantizerOptions { MaxColors = colors })));
+
+            // Capture the exact post-quantize pixels the PNG below stores (PNG is lossless, so
+            // Image.Load of that PNG would yield these same bytes) -- the probe renderer reads
+            // these directly instead of round-tripping through a PNG decode (see
+            // SoftwareStoryboardRenderer.LoadAsset + GetMemoryPixels).
+            var pixels = new byte[image.Width * image.Height * 3];
+            image.CopyPixelDataTo(pixels);
+            _memoryPixels![id.RelativePath] = (pixels, image.Width, image.Height);
+
             using var ms = new MemoryStream();
             image.SaveAsPng(ms, new PngEncoder { CompressionLevel = _compressionLevel });
             var bytes = ms.ToArray();

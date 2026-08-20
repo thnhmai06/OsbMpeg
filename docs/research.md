@@ -456,3 +456,69 @@ assets=27706`) matched the prior confirmed-good baseline in every counted dimens
 landed within 0.03% of the previously recorded baseline total (some byte-level noise remains between
 runs separated by intervening code changes and cleaned-up scratch state — the counted-object equality
 above is the stronger signal that nothing regressed).
+
+## 2026-08-21 — Tuning-cost spec work: shared sample-window decode + probe PNG bypass (audited)
+
+Implemented the two tuning-cost specs (shared decode across candidates; PNG round-trip bypass in the
+probe renderer) and then audited the result — this entry is the audit record, numbers as measured.
+
+### What landed
+
+- **Shared decode**: `ParameterTuner.TuneAsync` pre-decodes the fixed sample windows once
+  (`FrameSource.ReadBuffersAsync` replays them; `TileEncodeLoop.Options.PreDecodedFrames`,
+  `VideoFrame.Wrap` for caller-owned buffers). ffmpeg spawns per tuning pass: **40 → 4**;
+  frame-wait stage **54.9s → 13ms** (0.03% of before).
+- **PNG bypass**: in-memory `AssetStore` keeps the post-quantize pixels (`GetMemoryPixels`);
+  `SoftwareStoryboardRenderer.LoadAsset` reads them directly — PNG decode round-trip gone on the
+  probe path. Disk-backed compile path untouched (returns null → old file path).
+- Correctness pinned by tests: 5 new `AssetStoreMemoryPixelsTests` (stored pixels == decoded PNG
+  bytes for quantized/unquantized sprites and animation frame paths; capture point is *after*
+  quantize; disk stores return null). 42/42 compiler tests pass; `bench` end-to-end on a 2s window
+  regression-clean (PSNR 34.51dB, SSIM 0.9964) — the real compile/disk path is intact.
+
+### A/B on bad_apple 5s-middle scene (`[107074, 112074)` ms), same machine, sequential runs
+
+| | old path (per-probe decode, `--no-shared`) | new path (shared decode) |
+|---|---:|---:|
+| ffmpeg spawns | 40 | 4 |
+| frame wait | 86 649ms | 13ms |
+| encode stage sums (CPU work) | 904 166ms | 452 543ms (−50%) |
+| wall | 361 162ms | 459 936ms ⚠︎ |
+| tuned combo | 64/32/8/0 | 64/32/8/0 |
+
+**Wall is machine-confounded, not a code regression**: the *old* path measured **88.8s** at this
+session's start and **361s** today — same code, same fixture. The machine is ~4x slower under
+current load (Rider + Chrome ≈ 4GB; 1.9GB free RAM; 41% CPU). Second factor: with ffmpeg gone,
+candidates become pure-CPU and stop interleaving behind decode waits — measured parallelism
+collapsed from ~2.4x (old, ffmpeg-paced) to ~1.0x (new, CPU-bound, contended machine). The
+load-independent measure is total CPU work: **halved**. A clean wall comparison needs an idle-machine
+re-measure; `tune-bench --no-shared` exists for exactly that.
+
+### Correctness caveat discovered by the audit (spec claim was too strong)
+
+The original spec claimed byte-identical output vs the old path. Not true, and the old path itself
+never had it: **per-ffmpeg-spawn decode jitters ±1 frame at the window boundary**. In a single
+*old-path* run, the same tuple (64,32,8,0) probed in two different axes produced costs differing by
+**9%** (3 226 823 vs 3 530 775) and eval PSNR differing 0.01dB. New-vs-old across runs: train 29.53
+vs 29.56dB, eval 23.76 vs 23.67dB, cost within 6.5% — the same order as that pre-existing jitter.
+Decision stays stable (64/32/8/0 both paths). The shared path *removes* within-run jitter: one
+decode per window → every candidate compares against the same fixed reference frames, and equal
+tuples always give equal results inside a run (old design could swing 9% between axes). That is a
+real search-consistency improvement, worth keeping.
+
+### Decision: keep as-is
+
+Kept the current implementation, with these acknowledged tradeoffs:
+
+- **Memory**: all 4 sample windows are held for the whole search (~840MB at 1440x1080@60), a
+  deviation from the spec's one-window-at-a-time goal. Isolated 1-window run (280MB) showed the same
+  CPU-stage costs, so pinning is not the cause of today's wall numbers — but it is the biggest
+  remaining memory risk on low-RAM machines (8GB class). Fallback if it ever bites: window-major
+  per-axis scheduling (4x4 = 16 decodes, ~210MB resident) or the fan-out pump (both noted in the
+  now-deleted spec files; the design survives in ParameterTuner's comments).
+- **Unrelated working-tree noise**: 6 files carry cosmetic collection-expression refactors
+  (`[...]` for `ToArray/ToList`) made outside this session: `GroupTransformBaker`,
+  `ScenePrePass`, `TileTimeline`, `FrameSourceTests`, `ParameterTunerTests`,
+  `OsbWriterShorthandTests`. Functionally inert, left untouched.
+- The `tune-bench` command (hidden; `--no-shared` A/B flag; per-window stage table; peak working
+  set) stays as the measurement instrument for future runs.

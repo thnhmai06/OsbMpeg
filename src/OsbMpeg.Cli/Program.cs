@@ -20,6 +20,10 @@ app.Configure(config =>
         .WithDescription("Encode, decode, and report compression + quality metrics.")
         .IsHidden();
 
+    config.AddCommand<TuneBenchCommand>("tune-bench")
+        .WithDescription("Benchmark the auto-tuner: tune a scene while reporting per-window stage timings.")
+        .IsHidden();
+
     config.AddCommand<ProbeCommand>("probe")
         .WithDescription("Print media info for a video file.")
         .IsHidden();

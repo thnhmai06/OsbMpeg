@@ -127,14 +127,26 @@ public sealed class SoftwareStoryboardRenderer
         if (_assetCache.TryGetValue(id, out var cached))
             return cached;
 
+        // Probe-renderer shortcut (AssetStore in-memory mode only; disk-backed stores return
+        // null here): PNG is lossless, so the store's post-quantize pixels are exactly what
+        // decoding its saved PNG would yield — skip the Image.Load round-trip entirely. This is
+        // the probe path's biggest single render cost on churn-heavy content (Surface, since the
+        // tuner's in-memory store keeps every unique tile's encoded bytes).
+        if (_assetStore?.GetMemoryPixels(id) is { } stored)
+        {
+            var frame = new SpriteFrame(stored.Pixels, stored.Width, stored.Height);
+            _assetCache[id] = frame;
+            return frame;
+        }
+
         using var image = _assetStore?.GetMemoryBytes(id) is { } bytes
             ? Image.Load<Rgb24>(bytes)
             : Image.Load<Rgb24>(Path.Combine(_assetRootDir, id.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
         var buffer = new byte[image.Width * image.Height * 3];
         image.CopyPixelDataTo(buffer);
-        var frame = new SpriteFrame(buffer, image.Width, image.Height);
-        _assetCache[id] = frame;
-        return frame;
+        var loaded = new SpriteFrame(buffer, image.Width, image.Height);
+        _assetCache[id] = loaded;
+        return loaded;
     }
 
     private static (double X, double Y) OriginFraction(SbOrigin origin)

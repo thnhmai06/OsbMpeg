@@ -51,6 +51,26 @@ public static class FrameSource
     // that error case -- it doesn't mask it.
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    ///     Replays pre-decoded frame buffers (raw packed Rgb24, one byte[] per frame) through the
+    ///     same <see cref="VideoFrame" /> surface as ffmpeg decoding — used by ParameterTuner's
+    ///     probe path, which decodes the scene's fixed sample windows exactly once per search
+    ///     instead of once per candidate (each frame is wrapped, never copied; ownership of the
+    ///     buffers stays with the caller). <c>Pts</c> follows the same 0-based, fps-derived
+    ///     convention as the ffmpeg path's output stream.
+    /// </summary>
+    public static async IAsyncEnumerable<VideoFrame> ReadBuffersAsync(
+        IReadOnlyList<byte[]> frames,
+        FrameSourceOptions opts,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        for (var i = 0; i < frames.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return VideoFrame.Wrap(frames[i], opts.Width, opts.Height, i, i / opts.Fps);
+        }
+    }
+
     public static async IAsyncEnumerable<VideoFrame> ReadFramesAsync(
         string inputPath,
         FrameSourceOptions opts,

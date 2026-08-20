@@ -93,16 +93,55 @@ public static class ParameterTuner
     /// </summary>
     public static async Task<TunedParameters> TuneAsync(string inputPath, MediaInfo info, double fps,
         double segmentStartMs, double segmentEndMs, bool isFirstSegment, string? hwAccel, Action<string>? log,
-        CancellationToken ct)
+        CancellationToken ct, Action<ProbeWindowTimes>? onWindowTimed = null, bool shareDecode = true)
     {
         var (trainWindows, evalWindow) =
             BuildSampleWindows(segmentStartMs, segmentEndMs - segmentStartMs, isFirstSegment);
 
+        // Decode the fixed sample windows exactly once, up front, instead of once per candidate:
+        // the windows depend only on the scene (BuildSampleWindows), never on the parameter tuple,
+        // so every probe after the first re-decodes identical bytes. One ffmpeg pass per window
+        // replaces 10 (the TileSize/Colors/HashQuant/Tolerance batch sizes), and every probe
+        // afterward runs the full encode/PSNR pipeline from the shared buffers. The frames are
+        // held for the whole search (the 4 windows are at most ~3s of content — bounded, not
+        // proportional to scene size); see ReadBuffersAsync/ProbeAsync for how they're fed in.
+        var sharedFrames = shareDecode
+            ? await DecodeSampleWindowsAsync(inputPath, info, fps,
+                [.. trainWindows.Append(evalWindow).Distinct()], hwAccel, ct)
+            : null;
+
         return await TuneCoreAsync(
             (tileSize, hashQuantLevels, tileTolerance, colors) =>
                 ProbeTrainEvalAsync(inputPath, info, fps, trainWindows, evalWindow, tileSize, hashQuantLevels,
-                    tileTolerance, colors, hwAccel, ct),
+                    tileTolerance, colors, sharedFrames, ct, onWindowTimed),
             Path.GetFileName(inputPath), log);
+    }
+
+    /// <summary>
+    ///     Captures the raw packed-Rgb24 frames of each sample window in one ffmpeg pass per
+    ///     window (Start is absolute file time; Pts stays 0-based within each window like the
+    ///     encode path expects). Dict keyed by <c>(Start, DurationMs)</c> — exact double equality
+    ///     with the values ProbeTrainEvalAsync looks up, all derived from the same BuildSampleWindows.
+    /// </summary>
+    private static async Task<Dictionary<(double Start, double DurationMs), List<byte[]>>>
+        DecodeSampleWindowsAsync(string inputPath, MediaInfo info, double fps,
+            (double Start, double DurationMs)[] windows, string? hwAccel, CancellationToken ct)
+    {
+        var decoded = new Dictionary<(double Start, double DurationMs), List<byte[]>>();
+        foreach (var w in windows)
+        {
+            var frameOpts = new FrameSourceOptions(info.Width, info.Height, fps,
+                TimeSpan.FromMilliseconds(w.Start), TimeSpan.FromMilliseconds(w.DurationMs),
+                hwAccel != null ? $"-hwaccel {hwAccel}" : null);
+
+            var frames = new List<byte[]>();
+            await foreach (var frame in FrameSource.ReadFramesAsync(inputPath, frameOpts, ct))
+                using (frame)
+                    frames.Add([.. frame.Rgb]);
+            decoded[w] = frames;
+        }
+
+        return decoded;
     }
 
     /// <summary>
@@ -132,7 +171,7 @@ public static class ParameterTuner
         if (segmentDurationMs <= RequiredSampleMs)
         {
             var whole = (segmentStartMs, segmentDurationMs);
-            return (new[] { whole }, whole);
+            return ([whole], whole);
         }
 
         var blockStart = isFirstSegment
@@ -140,11 +179,12 @@ public static class ParameterTuner
             : segmentStartMs;
 
         var chunkMs = RequiredSampleMs / 4.0;
-        double ChunkStart(int i) => blockStart + chunkMs * i;
 
         var train = new[] { (ChunkStart(0), chunkMs), (ChunkStart(1), chunkMs), (ChunkStart(3), chunkMs) };
         var eval = (ChunkStart(2), chunkMs);
         return (train, eval);
+
+        double ChunkStart(int i) => blockStart + chunkMs * i;
     }
 
     /// <summary>
@@ -300,12 +340,14 @@ public static class ParameterTuner
     private static async Task<(ProbeResult Train, ProbeResult Eval)> ProbeTrainEvalAsync(string inputPath,
         MediaInfo info, double fps, (double Start, double DurationMs)[] trainWindows,
         (double Start, double DurationMs) evalWindow, int tileSize, int hashQuantLevels, int tileTolerance,
-        int colors, string? hwAccel, CancellationToken ct)
+        int colors, IReadOnlyDictionary<(double Start, double DurationMs), List<byte[]>>? sharedFrames,
+        CancellationToken ct, Action<ProbeWindowTimes>? onWindowTimed)
     {
         var trainResults = new ProbeResult[trainWindows.Length];
         for (var i = 0; i < trainWindows.Length; i++)
             trainResults[i] = await ProbeAsync(inputPath, info, fps, trainWindows[i].Start,
-                trainWindows[i].DurationMs, tileSize, hashQuantLevels, tileTolerance, colors, hwAccel, ct);
+                trainWindows[i].DurationMs, tileSize, hashQuantLevels, tileTolerance, colors, sharedFrames, ct,
+                onWindowTimed);
 
         // Short-scene case (see BuildSampleWindows): eval is the exact same window as the one and
         // only train window -- probing it a second time would just re-decode identical data for an
@@ -313,7 +355,7 @@ public static class ParameterTuner
         var evalResult = trainWindows.Length == 1 && trainWindows[0] == evalWindow
             ? trainResults[0]
             : await ProbeAsync(inputPath, info, fps, evalWindow.Start, evalWindow.DurationMs, tileSize,
-                hashQuantLevels, tileTolerance, colors, hwAccel, ct);
+                hashQuantLevels, tileTolerance, colors, sharedFrames, ct, onWindowTimed);
 
         var train = new ProbeResult(
             trainResults.Average(r => r.Psnr),
@@ -328,7 +370,8 @@ public static class ParameterTuner
 
     private static async Task<ProbeResult> ProbeAsync(string inputPath, MediaInfo info, double fps,
         double windowStartMs, double windowDurationMs, int tileSize, int hashQuantLevels, int tileTolerance,
-        int colors, string? hwAccel, CancellationToken ct)
+        int colors, IReadOnlyDictionary<(double Start, double DurationMs), List<byte[]>>? sharedFrames,
+        CancellationToken ct, Action<ProbeWindowTimes>? onWindowTimed)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -340,39 +383,94 @@ public static class ParameterTuner
         var doc = new SbDocument();
         var mapping = new CanvasMapping(info.Width, info.Height);
         var target = new TileEncodeLoop.EmitTarget(mapping, SbLayer.Background, 0, null, doc.Add);
+
+        // TuneAsync decoded the fixed sample windows once (see DecodeSampleWindowsAsync); this
+        // probe replays those exact frames into the encode pipeline and the PSNR comparison, so
+        // it never spawns ffmpeg at all. When sharedFrames is null (tune-bench --no-shared A/B
+        // mode), fall back to the original per-probe decode: capture source frames via onFrame
+        // while the encoder makes its own ffmpeg pass.
+        var decodedFrames = sharedFrames is not null &&
+                            sharedFrames.TryGetValue((windowStartMs, windowDurationMs), out var shared)
+            ? shared
+            : null;
         var loopOptions = new TileEncodeLoop.Options(
             inputPath, info.Width, info.Height, fps,
             TimeSpan.FromMilliseconds(windowStartMs), TimeSpan.FromMilliseconds(windowDurationMs),
-            tileSize, hashQuantLevels, false, tileTolerance, 300, 0.8, false, 17_000_000, [target], colors,
-            hwAccel);
+            tileSize, hashQuantLevels, false, tileTolerance, 300, 0.8, false, 17_000_000, [target], colors)
+            with { PreDecodedFrames = decodedFrames };
 
-        // Capture each source frame's pixels as TileEncodeLoop decodes them for its own
-        // purposes, instead of decoding the same short window a second time afterward just
-        // for comparison — halves the ffmpeg process count per probe.
+        TileEncodeLoop.EncodeStageTimes? encodeStageTimes = null;
         var decodeSw = System.Diagnostics.Stopwatch.StartNew();
-        var sourceFrames = new List<byte[]>();
-        await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct,
-            (frame, _) => sourceFrames.Add(frame.Rgb.ToArray()));
+        List<byte[]> sourceFrames;
+        if (decodedFrames is not null)
+        {
+            sourceFrames = decodedFrames;
+            await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct,
+                onStageTimes: times => encodeStageTimes = times);
+        }
+        else
+        {
+            sourceFrames = new List<byte[]>();
+            await TileEncodeLoop.RunAsync(loopOptions, assetStore, null, ct,
+                (frame, _) => sourceFrames.Add(frame.Rgb.ToArray()),
+                times => encodeStageTimes = times);
+        }
         var decodeMs = decodeSw.ElapsedMilliseconds;
 
+        var reconSw = System.Diagnostics.Stopwatch.StartNew();
         var renderSw = System.Diagnostics.Stopwatch.StartNew();
         var renderer = new SoftwareStoryboardRenderer(doc, "", info.Width, info.Height, assetStore);
         var reconFrameCount = Math.Max(1, (int)Math.Ceiling(renderer.DurationMs / 1000.0 * fps));
 
         double psnrSum = 0;
         var compared = 0;
+        var psnrSw = System.Diagnostics.Stopwatch.StartNew();
+        long renderOnlyMs = 0, psnrMs = 0;
 
         for (; compared < sourceFrames.Count && compared < reconFrameCount; compared++)
         {
             var t = compared * 1000.0 / fps;
+            renderSw.Restart();
             var canvas = renderer.RenderFrame(t);
+            renderOnlyMs += renderSw.ElapsedMilliseconds;
+
+            psnrSw.Restart();
             psnrSum += Metrics.Psnr(canvas.Rgb, sourceFrames[compared]);
+            psnrMs += psnrSw.ElapsedMilliseconds;
         }
 
-        var renderMs = renderSw.ElapsedMilliseconds;
+        var renderMs = reconSw.ElapsedMilliseconds;
 
         var psnr = compared == 0 ? 0 : psnrSum / compared;
+
+        if (onWindowTimed is not null && encodeStageTimes is not null)
+            onWindowTimed(new ProbeWindowTimes(windowStartMs, windowDurationMs, tileSize, hashQuantLevels,
+                tileTolerance, colors, encodeStageTimes.FrameWaitMs, encodeStageTimes.TrackMs,
+                encodeStageTimes.MergeMs, encodeStageTimes.DetectMs, encodeStageTimes.EmitMs, renderOnlyMs, psnrMs,
+                sw.ElapsedMilliseconds));
+
         return new ProbeResult(psnr, assetStore.TotalBytes, doc.CommandCount, sw.ElapsedMilliseconds,
             decodeMs, renderMs, doc.SpriteCount + doc.AnimationCount);
     }
 }
+
+/// <summary>
+///     Per-window timing breakdown collected by <c>onWindowTimed</c> during a tuning pass —
+///     the benchmark command's raw material. Fields mirror <see cref="TileEncodeLoop.EncodeStageTimes" />
+///     for the encode pass, then add the probe's own render/PSNR wall time and the probe total.
+/// </summary>
+public sealed record ProbeWindowTimes(
+    double WindowStartMs,
+    double WindowDurationMs,
+    int TileSize,
+    int HashQuantLevels,
+    int TileTolerance,
+    int Colors,
+    long FrameWaitMs,
+    long TrackMs,
+    long MergeMs,
+    long DetectMs,
+    long EmitMs,
+    long RenderMs,
+    long PsnrMs,
+    long ProbeMs);
