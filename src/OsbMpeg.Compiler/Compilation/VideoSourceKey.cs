@@ -13,13 +13,15 @@ namespace OsbMpeg.Compiler.Compilation;
 public readonly record struct VideoSourceKey(string NormalizedPath, double EffectiveFps)
 {
     /// <summary>
-    ///     effectiveFps = min(requested, source) — never duplicates frames to reach a
-    ///     requested rate above the source's own, since that produces no new information and
-    ///     just inflates frame/asset count for free.
+    ///     The storyboard runs at the requested frame rate; ffmpeg's fps filter resamples to
+    ///     reach it. When requested &gt; source the filter duplicates frames (no new information,
+    ///     but a user who asks for e.g. a 60fps timeline against a 24fps source gets exactly
+    ///     that cadence); when requested &lt; source it drops frames as before. Null means the
+    ///     source's own rate.
     /// </summary>
     public static VideoSourceKey Create(string filePath, double? requestedFps, double sourceFps)
     {
-        var effective = Math.Min(requestedFps ?? sourceFps, sourceFps);
+        var effective = requestedFps ?? sourceFps;
         // Windows paths are case-insensitive; fold case so "Video.MP4" and "video.mp4" hit
         // the same key instead of decoding the same file twice.
         var normalized = Path.GetFullPath(filePath).ToLowerInvariant();

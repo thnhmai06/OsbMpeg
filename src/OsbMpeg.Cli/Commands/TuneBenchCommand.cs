@@ -43,7 +43,7 @@ public sealed class TuneBenchCommand : AsyncCommand<TuneBenchSettings>
 
         var wall = Stopwatch.StartNew();
         var tuned = await ParameterTuner.TuneAsync(settings.Input, info, fps, startMs, endMs,
-            startMs <= 0, hwAccel: null,
+            startMs <= 0, settings.HwAccel,
             log: line => AnsiConsole.MarkupLineInterpolated($"[grey]{line.EscapeMarkup()}[/]"),
             cancellationToken, probeTimes.Add, shareDecode: !settings.NoShared);
         wall.Stop();

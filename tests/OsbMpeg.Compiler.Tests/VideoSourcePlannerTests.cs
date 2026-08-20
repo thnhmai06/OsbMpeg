@@ -44,16 +44,31 @@ public class VideoSourcePlannerTests
     }
 
     [Fact]
-    public async Task RequestedFpsAboveSource_ClampsToSource_StillShares()
+    public async Task RequestedFpsAboveSource_UpsamplesByDuplication_EqualRequestsShare()
     {
         var info = new Dictionary<string, MediaInfo>
             { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
-        var videos = new[] { Video("a.mp4", 0, 60), Video("a.mp4", 5000) }; // 60 requested clamps to source's 30
+        var videos = new[] { Video("a.mp4", 0, 60), Video("a.mp4", 5000, 60) }; // 60 requested > source 30: ffmpeg duplicates to reach it
 
         var plans = await VideoSourcePlanner.PlanAsync(videos, FakeProbe(info));
 
         var item = Assert.Single(plans);
-        Assert.Equal(30, item.Key.EffectiveFps);
+        Assert.Equal(60, item.Key.EffectiveFps); // requested rate wins; no clamp to source
+        Assert.Equal(2, item.Members.Count); // same file at the same requested rate still shares one decode
+    }
+
+    [Fact]
+    public async Task DifferentRequestedFps_SameFile_GetSeparatePlans()
+    {
+        var info = new Dictionary<string, MediaInfo>
+            { [Path.GetFullPath("a.mp4")] = new(1920, 1080, 30, TimeSpan.FromSeconds(10), "h264") };
+        var videos = new[] { Video("a.mp4", 0, 60), Video("a.mp4", 5000) }; // null fps keeps the source rate
+
+        var plans = await VideoSourcePlanner.PlanAsync(videos, FakeProbe(info));
+
+        Assert.Equal(2, plans.Count); // 60fps and 30fps samples of one file are different decode jobs
+        Assert.Equal(60, plans[0].Key.EffectiveFps);
+        Assert.Equal(30, plans[1].Key.EffectiveFps);
     }
 
     [Fact]

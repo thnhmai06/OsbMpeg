@@ -26,6 +26,10 @@ public sealed class TuneBenchSettings : CommandSettings
     [CommandOption("--ffmpeg-path <DIR>")]
     public string? FFmpegPath { get; set; }
 
+    [CommandOption("--hwaccel <MODE>")]
+    [Description("Hardware acceleration mode forwarded to ffmpeg as \"-hwaccel MODE\" (e.g. cuda, qsv, vaapi). Omit for CPU decode.")]
+    public string? HwAccel { get; set; }
+
     [CommandOption("--no-progress")]
     public bool NoProgress { get; set; }
 }
