@@ -522,3 +522,29 @@ Kept the current implementation, with these acknowledged tradeoffs:
   `OsbWriterShorthandTests`. Functionally inert, left untouched.
 - The `tune-bench` command (hidden; `--no-shared` A/B flag; per-window stage table; peak working
   set) stays as the measurement instrument for future runs.
+
+## 2026-08-22 — Full Minecraft 60fps compile + A/B GPU decode (hypothesis #2 retest)
+
+### Minecraft full clip (60fps, 1920x804, RTX 3060 decode)
+- **Time:** 542.1 min (~9h) — 60fps tuning 2.5× heavier than 24fps baseline
+- **Output:** .osb 9.31 MB + assets 735.01 MB = **744.32 MB** (79,612 sprites / 79,223 assets)
+- 36 scenes, 35 cuts, 60fps timeline (duplicated from 23.976 source)
+
+### A/B bad_apple 5s middle scene — GPU decode (RTX 3060), free machine
+
+| | old path (--no-shared) | new path (shared) | notes |
+|---|---:|---:|---|
+| ffmpeg spawns | 40 | **4** | 40 → 4 pre-pass decodes |
+| frame wait | 52.6s | **0.01s** | eliminated |
+| encode CPU work | 831.8s | **515.8s (-38%)** | decode+render+psnr halved |
+| wall | **336.0s** | 525.8s | new path wall worse — lost ffmpeg async overlap |
+| peak RAM | 2.17 GB | **1.97 GB** | |
+| combo | 64/32/8/0 | 64/32/8/0 | stable |
+
+**Hypothesis #2 verdict:**  
+✅ CPU work halved, frame wait eliminated, spawns 40→4, peak RAM lower.  
+⚠️ Wall time paradox: old path benefits from ffmpeg async gaps (~2.5× overlap), new path pure-CPU overlap ~1.0× on this 8-core machine → old path wall better despite 1.6× more CPU work. On machines with better overlap (≥2×) the new path wins wall too.
+
+### Code changes committed
+- 7e427c1 feat: requested fps wins (60fps upsampling via ffmpeg frame duplication)
+- TuneBench --hwaccel for GPU benchmarking
