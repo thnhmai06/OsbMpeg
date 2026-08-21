@@ -548,3 +548,73 @@ Kept the current implementation, with these acknowledged tradeoffs:
 ### Code changes committed
 - 7e427c1 feat: requested fps wins (60fps upsampling via ffmpeg frame duplication)
 - TuneBench --hwaccel for GPU benchmarking
+
+## 2026-08-21 (follow-up) — Shared-decode fan-out deadlock; reverted to in-memory replay; fresh A/B on GPU machine
+
+### The bug: a channel fan-out replaced the in-memory replay and deadlocked
+
+After the 08-22 A/B above, the shared-decode path was reimplemented with a per-window
+channel fan-out (`WindowFrameSource` + `FanOutFrameBuffer`, `CreateFanOut(consumerCount,
+bufferSize=8)`). Its producer writes to **all** consumers unconditionally on every frame:
+
+```csharp
+for (int i = 0; i < _consumerCount; i++)
+    await _consumerChannels[i].Writer.WriteAsync(copies[i], ...);   // FullMode = Wait
+```
+
+Consequence: any consumer a probe is *not* currently reading fills up (8-frame buffer) and
+**blocks the producer**, which then can't feed the consumers that *are* being read →
+**deadlock at concurrency ≥ 4**. At concurrency 1 it didn't deadlock but **under-delivered
+frames** (only the ~8 already-buffered frames reached the lone reader before the producer
+stalled), so probes rendered a handful of frames and reported a falsely-fast ~56s "success"
+with a plausible-looking PSNR — incomplete work masquerading as a win. This is exactly why the
+earlier 56s/c=1 number was not trustworthy: it beat the documented 526s only by doing ~1/9 of
+the frames.
+
+### The fix: restore the proven in-memory replay (commit `8de86aa`)
+
+Reverted `TuneAsync` to decode each distinct sample window **once** into an in-memory
+`List<byte[]>` (`DecodeSampleWindowsAsync`) and replay it via
+`TileEncodeLoop.Options.PreDecodedFrames` (`VideoFrame.Wrap` over caller-owned buffers). Same
+design as the 08-21 audit and the 08-22 A/B that produced the tables above — one ffmpeg pass
+per window replaces the per-candidate decode (4 decodes total), with **no channels to
+deadlock**. Deleted the now-unused `FanOutFrameBuffer.cs`/`WindowFrameSource`. `tune-bench`
+keeps `--max-concurrency <N>` (global `SemaphoreSlim` bounding concurrent CPU probe workers)
+and `--no-shared` (per-probe decode A/B mode).
+
+Verified: `tune-bench --ss 107.074 -t 5` completes at **both concurrency 1 and 4** (no
+deadlock), reports **4 decoded windows / 1.96 GB peak RAM / combo 64/32/8/0**; all 43 compiler
+tests pass; build warning-free.
+
+### Fresh A/B on THIS machine — bad_apple 5s middle scene, CUDA GPU decode (`--hwaccel cuda`), concurrency 1
+
+Same fixture/window as the 08-22 table, re-run here to get a current-machine number:
+
+| | old path (`--no-shared`) | new path (shared) | change |
+|---|---:|---:|---|
+| ffmpeg spawns | 40 | **4** | ⬇️ 10× fewer |
+| frame wait (ffmpeg) | 43 239ms (9.7%) | **12ms (0.0%)** | ⬇️ eliminated |
+| encode CPU work | 444 300ms | **351 050ms** | ⬇️ −21% |
+| wall | 358 129ms | 360 881ms | ≈ **tied** (+0.8%, +2.8s) |
+| peak RAM | 1.71 GB | 1.96 GB | ⬆️ +0.25 GB (holds decoded frames) |
+| combo | 64/32/8/0 | 64/32/8/0 | ✅ stable |
+
+### Why the wall-time verdict flipped vs. the 08-22 table
+
+The 08-22 table (free machine) showed **new path wall WORSE** (526 vs 336s). Here it is
+**tied** (361 vs 358s). Same code, same design — the difference is the machine's decode path:
+
+- **Free machine (08-22):** CPU decode, ~8 cores. The old path's per-probe ffmpeg decode runs
+  *asynchronously* behind the CPU work, so its 40 spawns buy real ~2.5× pipeline overlap; the
+  new path is pure-CPU after the one-time decode and gets only ~1.0× overlap → old wins wall.
+- **This machine (CUDA GPU):** decode is offloaded to the GPU and fast, so the old path's
+  async-overlap advantage largely disappears; both paths are CPU-bound by the software renderer
+  and finish in ~360s. The new path's −21% CPU work and 10× fewer ffmpeg spawns come for free.
+
+**Conclusion: the wall-time gap is machine-confounded, not a code regression** — already
+suspected in the 08-21 audit and now confirmed by direct re-measure on a GPU box. On a machine
+with GPU decode (or enough cores that CPU work overlaps cleanly), shared decode is competitive
+on wall time *and* strictly better on spawns / frame-wait / CPU work. The deadlock fix makes
+it actually reachable at any concurrency. (RAM: shared decode holds the 4 decoded windows in
+memory, so it runs slightly *higher* here than the streaming old path; on CPU-only boxes the
+opposite held — see 08-22's 1.97 vs 2.17 GB — because 40 ffmpeg processes dominate there.)
