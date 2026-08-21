@@ -93,27 +93,34 @@ public static class ParameterTuner
     /// </summary>
     public static async Task<TunedParameters> TuneAsync(string inputPath, MediaInfo info, double fps,
         double segmentStartMs, double segmentEndMs, bool isFirstSegment, string? hwAccel, Action<string>? log,
-        CancellationToken ct, Action<ProbeWindowTimes>? onWindowTimed = null, bool shareDecode = true)
+        CancellationToken ct, Action<ProbeWindowTimes>? onWindowTimed = null, bool shareDecode = true,
+        int maxConcurrency = 4)
     {
         var (trainWindows, evalWindow) =
             BuildSampleWindows(segmentStartMs, segmentEndMs - segmentStartMs, isFirstSegment);
 
         // Decode the fixed sample windows exactly once, up front, instead of once per candidate:
         // the windows depend only on the scene (BuildSampleWindows), never on the parameter tuple,
-        // so every probe after the first re-decodes identical bytes. One ffmpeg pass per window
+        // so every probe after the first would re-decode identical bytes. One ffmpeg pass per window
         // replaces 10 (the TileSize/Colors/HashQuant/Tolerance batch sizes), and every probe
         // afterward runs the full encode/PSNR pipeline from the shared buffers. The frames are
         // held for the whole search (the 4 windows are at most ~3s of content — bounded, not
-        // proportional to scene size); see ReadBuffersAsync/ProbeAsync for how they're fed in.
+        // proportional to scene size); see DecodeSampleWindowsAsync/ProbeAsync for how they're fed in.
+        // When shareDecode=false (tune-bench --no-shared A/B mode), sharedFrames stays null and each
+        // probe decodes its own window via ffmpeg (the pre-optimization path).
         var sharedFrames = shareDecode
             ? await DecodeSampleWindowsAsync(inputPath, info, fps,
                 [.. trainWindows.Append(evalWindow).Distinct()], hwAccel, ct)
             : null;
 
+        // Global semaphore to bound total concurrent CPU probe work (track/merge/emit/render/psnr)
+        // across the whole search — honors tune-bench's --max-concurrency flag.
+        using var cpuSemaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+
         return await TuneCoreAsync(
             (tileSize, hashQuantLevels, tileTolerance, colors) =>
                 ProbeTrainEvalAsync(inputPath, info, fps, trainWindows, evalWindow, tileSize, hashQuantLevels,
-                    tileTolerance, colors, sharedFrames, ct, onWindowTimed),
+                    tileTolerance, colors, sharedFrames, ct, onWindowTimed, cpuSemaphore),
             Path.GetFileName(inputPath), log);
     }
 
@@ -341,21 +348,36 @@ public static class ParameterTuner
         MediaInfo info, double fps, (double Start, double DurationMs)[] trainWindows,
         (double Start, double DurationMs) evalWindow, int tileSize, int hashQuantLevels, int tileTolerance,
         int colors, IReadOnlyDictionary<(double Start, double DurationMs), List<byte[]>>? sharedFrames,
-        CancellationToken ct, Action<ProbeWindowTimes>? onWindowTimed)
+        CancellationToken ct, Action<ProbeWindowTimes>? onWindowTimed, SemaphoreSlim cpuSemaphore)
     {
         var trainResults = new ProbeResult[trainWindows.Length];
-        for (var i = 0; i < trainWindows.Length; i++)
-            trainResults[i] = await ProbeAsync(inputPath, info, fps, trainWindows[i].Start,
-                trainWindows[i].DurationMs, tileSize, hashQuantLevels, tileTolerance, colors, sharedFrames, ct,
-                onWindowTimed);
 
-        // Short-scene case (see BuildSampleWindows): eval is the exact same window as the one and
+        // Bound concurrent CPU probe work with the global semaphore (--max-concurrency). The train
+        // windows read from the shared in-memory buffers, so there's no per-probe ffmpeg decode to
+        // serialize on — the semaphore purely caps simultaneous encode/render/PSNR CPU load.
+        var trainTasks = trainWindows.Select(async (w, i) =>
+        {
+            await cpuSemaphore.WaitAsync(ct);
+            try
+            {
+                trainResults[i] = await ProbeAsync(inputPath, info, fps, w.Start, w.DurationMs,
+                    tileSize, hashQuantLevels, tileTolerance, colors, sharedFrames, ct, onWindowTimed);
+            }
+            finally
+            {
+                cpuSemaphore.Release();
+            }
+        }).ToArray();
+
+        await Task.WhenAll(trainTasks);
+
+        // Short-scene case: eval is the exact same window as the one and
         // only train window -- probing it a second time would just re-decode identical data for an
         // identical number. Reuse train's own result instead.
         var evalResult = trainWindows.Length == 1 && trainWindows[0] == evalWindow
             ? trainResults[0]
-            : await ProbeAsync(inputPath, info, fps, evalWindow.Start, evalWindow.DurationMs, tileSize,
-                hashQuantLevels, tileTolerance, colors, sharedFrames, ct, onWindowTimed);
+            : await ProbeAsync(inputPath, info, fps, evalWindow.Start, evalWindow.DurationMs,
+                tileSize, hashQuantLevels, tileTolerance, colors, sharedFrames, ct, onWindowTimed);
 
         var train = new ProbeResult(
             trainResults.Average(r => r.Psnr),

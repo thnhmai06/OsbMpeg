@@ -45,7 +45,7 @@ public sealed class TuneBenchCommand : AsyncCommand<TuneBenchSettings>
         var tuned = await ParameterTuner.TuneAsync(settings.Input, info, fps, startMs, endMs,
             startMs <= 0, settings.HwAccel,
             log: line => AnsiConsole.MarkupLineInterpolated($"[grey]{line.EscapeMarkup()}[/]"),
-            cancellationToken, probeTimes.Add, shareDecode: !settings.NoShared);
+            cancellationToken, probeTimes.Add, shareDecode: !settings.NoShared, maxConcurrency: settings.MaxConcurrency);
         wall.Stop();
 
         AnsiConsole.MarkupLineInterpolated($"Tuned: [bold]{tuned.TileSize}/{tuned.HashQuantLevels}/{tuned.TileTolerance}/{tuned.Colors}[/] (tile/hashquant/tolerance/colors) in [bold]{wall.ElapsedMilliseconds}ms[/] wall");

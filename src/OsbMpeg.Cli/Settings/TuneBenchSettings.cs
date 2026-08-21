@@ -30,6 +30,10 @@ public sealed class TuneBenchSettings : CommandSettings
     [Description("Hardware acceleration mode forwarded to ffmpeg as \"-hwaccel MODE\" (e.g. cuda, qsv, vaapi). Omit for CPU decode.")]
     public string? HwAccel { get; set; }
 
+    [CommandOption("--max-concurrency <N>")]
+    [Description("Maximum concurrent CPU probe workers (default: 4). Set to 1 for sequential, higher for parallel.")]
+    public int MaxConcurrency { get; set; } = 4;
+
     [CommandOption("--no-progress")]
     public bool NoProgress { get; set; }
 }
